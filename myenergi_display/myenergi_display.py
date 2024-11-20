@@ -4,11 +4,10 @@
 import argparse
 import threading
 import requests
-import itertools
 
 from requests.auth import HTTPDigestAuth
 from queue import Queue
-from time import time, sleep
+from time import time
 
 from datetime import timedelta, datetime, timezone
 import urllib.request
@@ -16,12 +15,10 @@ import json
 from copy import deepcopy
 
 import plotly.graph_objects as go
-import plotly.express as px
 
 from p3lib.uio import UIO
 from p3lib.helper import logTraceBack
 from p3lib.pconfig import DotConfigManager
-from p3lib.ngt import TabbedNiceGui
 from p3lib.boot_manager import BootManager
 from p3lib.ngt import TabbedNiceGui, YesNoDialog
 
@@ -371,6 +368,7 @@ class RegionalElectricity(object):
 #            costList.append(costDict[ts]/100.0)
         return (timeStampList, costList, end_charge_datetime)
 
+
 class GUIServer(object):
 
     MYENERGI_API_KEY = 'MYENERGI_API_KEY'
@@ -405,7 +403,7 @@ class GUIServer(object):
     DEFAULT_SERVER_PORT = 20000
     GUI_POLL_SECONDS = 0.1
     TARIFF_LIST = ["Octopus Agile Tarrif", 'Other Tarrif']
-    SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE  = "Set zappi charge schedule"
+    SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE = "Set zappi charge schedule"
     DEFAULT_BUTTON_COLOR = "blue"
 
     def __init__(self, uio, port):
@@ -452,10 +450,9 @@ class GUIServer(object):
 
         region_code = self._electricity_region_code.value
         if region_code is None or region_code not in RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS:
-            ui.notify(f"ERROR: Electricity region code not set.", type='negative')
+            ui.notify("ERROR: Electricity region code not set.", type='negative')
 
         else:
-#            print(f"PJA: region_code={region_code}")
             if self._check_eddi_access_ok():
                 self._cfg_mgr.addAttr(GUIServer.ELECTRICITY_REGION_CODE, region_code)
                 self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY,    self._api_key.value)
@@ -506,7 +503,7 @@ class GUIServer(object):
         if self._uio:
             self._uio.debug(msg)
 
-    def create_gui(self, debugEnabled, reload = False, show=False):
+    def create_gui(self, debugEnabled, reload=False, show=False):
         """@brief Create the GUI elements
            @param debugEnabled True enables debug.
            @param reload If True restart when this file is updated. Useful for dev.
@@ -734,9 +731,9 @@ class GUIServer(object):
             self._zappi_serial_number = ui.input(label='zappi serial number').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
         with ui.row():
             self._zappi_max_charge_rate = ui.select(options=["7.4", "22"],
-                                                      value="7.4",
-                                                      with_input=True,
-                                                      label='Zappi charge rate')
+                                                    value="7.4",
+                                                    with_input=True,
+                                                    label='Zappi charge rate')
         with ui.row():
             self._electricity_region_code = ui.select(options=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS,
                                                       value=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS[0],
@@ -807,9 +804,9 @@ class GUIServer(object):
     def _add_tariff_value(self):
         """@brief Add a tariff value to the displayed other tariff."""
         self._add_tariff_dialog = YesNoDialog("Add one tarrif point.",
-                                               self._tariff_value_entered,
-                                               successButtonText="OK",
-                                               failureButtonText="Cancel")
+                                              self._tariff_value_entered,
+                                              successButtonText="OK",
+                                              failureButtonText="Cancel")
         self._add_tariff_dialog.addField("Start time", YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
         self._add_tariff_dialog.addField("Price (£)", YesNoDialog.NUMBER_INPUT_FIELD_TYPE, minNumber=0, maxNumber=2, step=0.01)
         self._add_tariff_dialog.show()
@@ -830,7 +827,7 @@ class GUIServer(object):
                 pass
         if hour == -1 or min == -1:
             raise Exception(f"{tstr} is invalid (HH:MM expected).")
-        return (hour,min)
+        return (hour, min)
 
     def _tariff_value_entered(self):
         start_time = self._add_tariff_dialog.getValue('Start time')
@@ -842,7 +839,7 @@ class GUIServer(object):
 #                print(f"PJA: len(self._other_tariff_values) = {len(self._other_tariff_values)}")
                 # If this is the first tariff data then it must start at the start of the day.
                 if len(self._other_tariff_values) == 0 and (hour != 0 or min != 0):
-                    raise Exception(f"The first tariff value must start at 00:00 (HH:MM).")
+                    raise Exception("The first tariff value must start at 00:00 (HH:MM).")
 
                 if len(self._other_tariff_values) > 0:
                     this_hour, this_min = self._get_hour_min(start_time)
@@ -877,7 +874,6 @@ class GUIServer(object):
 
         # Convert the tariff times into datetime instances
         tariff_list = []
-        now = datetime.now().astimezone()
         index = 0
         for other_tariff_value in self._other_tariff_values:
             hour, min = self._get_hour_min(other_tariff_value[0])
@@ -932,26 +928,26 @@ class GUIServer(object):
             fig = go.Figure()
             max_cost = max(prices)
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
-                            width=350,
-                            height=150,
-                            showlegend=False,
-                            plot_bgcolor="black",       # Background for the plot area
-                            paper_bgcolor="black",      # Background for the entire figure
-                            font=dict(color="yellow"),  # Font color for labels and title
-                            xaxis=dict(
-                                title='Day (HH:MM)',
-                                tickformat='%H:%M',     # Format as hours:minutes
-                                color="yellow",         # Axis label color
-                                gridcolor="gray",       # Gridline color
-                                zerolinecolor="gray"    # Zero line color
-                            ),
-                            yaxis=dict(
-                                title="£ per kWh",
-                                color="yellow",         # Axis label color
-                                gridcolor="gray",       # Gridline color
-                                zerolinecolor="gray",   # Zero line color
-                                range=[0, max_cost*1.5]
-                            ),)
+                              width=350,
+                              height=150,
+                              showlegend=False,
+                              plot_bgcolor="black",       # Background for the plot area
+                              paper_bgcolor="black",      # Background for the entire figure
+                              font=dict(color="yellow"),  # Font color for labels and title
+                              xaxis=dict(
+                                  title='Day (HH:MM)',
+                                  tickformat='%H:%M',     # Format as hours:minutes
+                                  color="yellow",         # Axis label color
+                                  gridcolor="gray",       # Gridline color
+                                  zerolinecolor="gray"    # Zero line color
+                              ),
+                              yaxis=dict(
+                                  title="£ per kWh",
+                                  color="yellow",         # Axis label color
+                                  gridcolor="gray",       # Gridline color
+                                  zerolinecolor="gray",   # Zero line color
+                                  range=[0, max_cost*1.5]
+                              ),)
     #        fig.add_trace(go.Scatter(x=time_intervals, y=prices, marker=dict(color='green')))
             fig.add_trace(go.Bar(x=time_intervals, y=prices, marker=dict(color='green')))
             if self._other_tariff_plot_container:
@@ -1129,10 +1125,10 @@ class GUIServer(object):
         ui.notify("Calculating optimal charge time/s.", position='center', type='ongoing', timeout=2000)
         self._set_zappi_charge_active(False)
         threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
-                                                                            self._plot_container,
-                                                                            charge_time_mins,
-                                                                            float(self._zappi_max_charge_rate.value),
-                                                                            self._get_end_charge_time())).start()
+                                                                             self._plot_container,
+                                                                             charge_time_mins,
+                                                                             float(self._zappi_max_charge_rate.value),
+                                                                             self._get_end_charge_time())).start()
 
     def _get_region_code(self):
         """@brief Get the electricity region code.
@@ -1177,11 +1173,12 @@ class GUIServer(object):
 
         return (time_intervals, price_list)
 
-    def _get_charge_details(self, charge_mins, end_charge_time, charge_rate_kw):
+    def _get_charge_details(self, charge_mins, end_charge_time, charge_rate_kw, region_code):
         """@brief Get the requested charge details.
            @param charge_mins The required charge time in mins.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
            @param charge_rate_kw The rate at which the charger will charge the EV in kW.
+           @param region_code The regional electricity code.
            @return A tuple containing
                    0: A list of charge details dicts.
                    1: The end charge time (datetime instance)
@@ -1256,7 +1253,7 @@ class GUIServer(object):
                         charge_slot_dict_list.append(charge_slot_dict)
                         total_charge_mins = total_charge_mins + charge_mins_left
                         slot_cost = charge_slot_dict[RegionalElectricity.SLOT_COST]
-                        cost = cost + (((charge_mins_left/60.0)*charge_rate_kw)*charge_slot_dict[RegionalElectricity.SLOT_COST])
+                        cost = cost + (((charge_mins_left/60.0)*charge_rate_kw)*slot_cost)
                         charge_mins_left = 0
 
                     break
@@ -1283,8 +1280,9 @@ class GUIServer(object):
            @return A dict containing the slots that the car should charge in."""
         try:
             charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
-                                                                                                                                                end_charge_time,
-                                                                                                                                                charge_rate_kw)
+                                                                                                                                                 end_charge_time,
+                                                                                                                                                 charge_rate_kw,
+                                                                                                                                                 region_code)
 
             # Clear the old plot
             plot_container.clear()
@@ -1292,25 +1290,25 @@ class GUIServer(object):
             fig = go.Figure()
             max_cost = max(plot_cost_list)
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
-                            width=350,
-                            height=250,
-                            showlegend=False,
-                            plot_bgcolor="black",       # Background for the plot area
-                            paper_bgcolor="black",      # Background for the entire figure
-                            font=dict(color="yellow"),   # Font color for labels and title
-                            xaxis=dict(
-                                title="",
-                                color="yellow",          # Axis label color
-                                gridcolor="gray",       # Gridline color
-                                zerolinecolor="gray"    # Zero line color
-                            ),
-                            yaxis=dict(
-                                title="£ per kWh",
-                                color="yellow",         # Axis label color
-                                gridcolor="gray",       # Gridline color
-                                zerolinecolor="gray",   # Zero line color
-                                range=[0, max_cost*1.25]
-                            ),)
+                              width=350,
+                              height=250,
+                              showlegend=False,
+                              plot_bgcolor="black",       # Background for the plot area
+                              paper_bgcolor="black",      # Background for the entire figure
+                              font=dict(color="yellow"),   # Font color for labels and title
+                              xaxis=dict(
+                                  title="",
+                                  color="yellow",          # Axis label color
+                                  gridcolor="gray",       # Gridline color
+                                  zerolinecolor="gray"    # Zero line color
+                              ),
+                              yaxis=dict(
+                                  title="£ per kWh",
+                                  color="yellow",         # Axis label color
+                                  gridcolor="gray",       # Gridline color
+                                  zerolinecolor="gray",   # Zero line color
+                                  range=[0, max_cost*1.25]
+                              ),)
             fig.add_trace(go.Bar(x=plot_time_stamp_list, y=plot_cost_list, opacity=0.5, marker=dict(color='green')))
 
             for charge_slot_dict in charge_slot_dict_list:
@@ -1438,7 +1436,9 @@ def main():
         handled = BootManager.HandleOptions(uio, options, options.syslog)
         if not handled:
             gui = GUIServer(uio, options.port)
-            gui.create_gui(options.debug, reload = options.reload, show = options.show)
+            gui.create_gui(options.debug,
+                           reload=options.reload,
+                           show=options.show)
 
     # If the program throws a system exit exception
     except SystemExit:
