@@ -307,21 +307,17 @@ class RegionalElectricity(object):
     SLOT_COST = "SLOT_COST"
 
     @staticmethod
-    def Get_next_30_min_time():
+    def GET_NEXT_30_MIN_TIME():
         """@brief Get the next time on a 30 minute boundary. On the hour or half hour.
            @return A datetime instance on the next hour or half hour boundary."""
         now = datetime.now().astimezone()
-        print(f"PJA: now={now}")
         # Add 30 mins in the future
         next_dt = now + timedelta(minutes=30)
-        print(f"PJA: next_dt={next_dt}")
         if next_dt.minute > 30:
             next_dt = next_dt.replace(minute=30, second=0, microsecond=0)
-            print(f"PJA: 1 next_dt={next_dt}")
         else:
             next_dt = next_dt.replace(minute=00, second=0, microsecond=0)
-            print(f"PJA: 2 next_dt={next_dt}")
-        print(f"PJA: 3 next_dt={next_dt}")
+
         return next_dt
 
     def __init__(self, uio):
@@ -355,7 +351,7 @@ class RegionalElectricity(object):
                    0 = A list of timestamps. This includes the start and end of each 1/2 hour slot.
                    1 = The price of electricity in £ in that 1/2 hour slot.
                    2 = The end of charge date time object or None if not defined."""
-        start_datetime = RegionalElectricity.Get_next_30_min_time()
+        start_datetime = RegionalElectricity.GET_NEXT_30_MIN_TIME()
 
         costDict = self._get_cost_dict(region_code)
         now = datetime.now().astimezone()
@@ -1158,7 +1154,7 @@ class GUIServer(object):
         """@brief Get the tariff data needed to calculate the best charge times when not
                   one octopus agile tariff.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed."""
-        start_datetime = RegionalElectricity.Get_next_30_min_time()
+        start_datetime = RegionalElectricity.GET_NEXT_30_MIN_TIME()
 
         # Get a value for every 1/2 hour through the day and into the next
         time_intervals = [start_datetime + timedelta(minutes=30 * i) for i in range((48*2))]
