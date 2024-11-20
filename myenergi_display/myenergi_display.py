@@ -1051,21 +1051,29 @@ class GUIServer(object):
             with ui.column():
                 ui.label().bind_text_from(self._charge_time_mins_slider, 'value').style(GUIServer.TEXT_STYLE_B)
 
+        # Put this off the bottom of the mobile screen as most times it will not be needed
+        # and there is not enough room on the mobile screen above the plot pane.
+        self._end_charge_time_input = self._get_input_time_field('Ready by')
+
         with ui.row():
             # A plot of energy costs is added to this container when the users requests it
             self._plot_container = ui.element('div')
 
         with ui.row():
-            self._calc_button = ColorButton(self._calc_optimal_charge_times, 'Calc Charge')
+            self._calc_button = ColorButton(self._calc_optimal_charge_times, 'Calc')
             self._calc_button.tooltip("Calculate the optimal charge time/s.")
             self._set_button = ColorButton(self._set_zappi_charge, 'Set')
             self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.\nGreen when the charger has accepted the schedule.')
+            self._get_button = ColorButton(self._get_zappi_charge, 'Get')
+            self._get_button.tooltip('Get the current charge schedule on your zappi.')
+
             reset_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._reset_zappi_charge)
             reset_button.tooltip('Clear all charge schedules from your zappi charger.')
 
-        # Put this off the bottom of the mobile screen as most times it will not be needed
-        # and there is not enough room on the mobile screen above the plot pane.
-        self._end_charge_time_input = self._get_input_time_field('Ready by')
+    def _get_zappi_charge(self):
+        """@brief Get the current zappi charge schedule."""
+        pass
+        #PJA TODO
 
     def _set_zappi_charge_active(self, active):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
