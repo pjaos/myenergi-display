@@ -751,7 +751,7 @@ class GUIServer(object):
 
         with ui.row():
             self._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
-#            self._plot_tariff_button = ui.button('Plot', on_click=self._plot_tariff)
+# PJA           self._plot_tariff_button = ui.button('Plot', on_click=self._plot_tariff)
             self._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
 
         with ui.row():
@@ -777,11 +777,11 @@ class GUIServer(object):
         """@brief Called when the octopus agile tariff is enabled."""
         if enabled:
             self._add_tariff_value_button.disable()
-#            self._plot_tariff_button.disable()
+# PJA           self._plot_tariff_button.disable()
             self._clear_tariff_value_button.disable()
         else:
             self._add_tariff_value_button.enable()
-#            self._plot_tariff_button.enable()
+# PJA           self._plot_tariff_button.enable()
             self._clear_tariff_value_button.enable()
 
     def _tariff_changed(self):
@@ -1034,8 +1034,8 @@ class GUIServer(object):
             self._plot_container = ui.element('div')
 
         with ui.row():
-            calc_button = ui.button('Calc Charge', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._calc_optimal_charge_times)
-            calc_button.tooltip("Calculate the optimal charge time/s.")
+            self._calc_button = ColorButton(self._calc_optimal_charge_times, 'Calc Charge')
+            self._calc_button.tooltip("Calculate the optimal charge time/s.")
             self._set_button = ColorButton(self._set_zappi_charge, 'Set')
             self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.\nGreen when the charger has accepted the schedule.')
             reset_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._reset_zappi_charge)
@@ -1049,6 +1049,10 @@ class GUIServer(object):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
            @param active If True then a zappi charge schedule has been set."""
         self._set_button.set_on(active)
+        if active:
+            self._calc_button.disable()
+        else:
+            self._calc_button.enable()
 
     def _get_input_time_field(self, label):
         """@brief Add a control to allow the user to enter the time as an hour and min.
