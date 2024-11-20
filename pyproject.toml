@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "myenergi-display"
+version = "0.15"
+description = ""
+authors = ["Paul Austen <pjaos@gmail.com>"]
+readme = "README.md"
+
+include = [
+    { path = "assets", format = ["sdist", "wheel"] },
+    { path = "pyproject.toml", format = ["sdist", "wheel"] },
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+click = "*"
+p3lib = "*"
+requests = "*"
+nicegui = "*"
+plotly = "*"
+
+[tool.poetry.scripts]
+myenergi_display = "myenergi_display.myenergi_display:main"
+med = "myenergi_display.myenergi_display:main"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
