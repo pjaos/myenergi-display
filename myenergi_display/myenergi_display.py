@@ -1280,7 +1280,7 @@ class GUIServer(object):
             max_cost = max(plot_cost_list)
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
                               width=350,
-                              height=250,
+                              height=200,
                               showlegend=False,
                               plot_bgcolor="black",       # Background for the plot area
                               paper_bgcolor="black",      # Background for the entire figure
