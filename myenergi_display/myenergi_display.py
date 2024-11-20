@@ -360,8 +360,8 @@ class RegionalElectricity(object):
         # If the user requires the charge to be complete by a certain time
         end_charge_datetime = None
         if end_charge_time:
-            last_time_stamp = _timeStampList[-1]
-            end_charge_datetime = last_time_stamp.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+            end_charge_datetime = GUIServer.GET_END_CHARGE_DATETIME(end_charge_time)
+
         timeStampList = []
         costList = []
         for ts in _timeStampList:
@@ -1158,6 +1158,22 @@ class GUIServer(object):
             region_code = elems[0]
         return region_code
 
+    @staticmethod
+    def GET_END_CHARGE_DATETIME(end_charge_time):
+        """@brief Get the end charge time as a datetime instance.
+           @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed."""
+        end_charge_datetime = None
+        # If the end charge time is defined then ensure we don't have time after this in the list.
+        if end_charge_time:
+            now = datetime.now().astimezone()
+            then = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+            # If this time is in the past
+            if then < now:
+                # Move the hour:min time to next day
+                then = now.replace(day=now.day+1, hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+                end_charge_datetime = then
+        return end_charge_datetime
+
     def _get_tariff_data(self, end_charge_time):
         """@brief Get the tariff data needed to calculate the best charge times when not
                   one octopus agile tariff.
@@ -1169,12 +1185,8 @@ class GUIServer(object):
 
         # If the end charge time is defined then ensure we don't have time after this in the list.
         if end_charge_time:
-            now = datetime.now().astimezone()
-            then = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
-            # If this time is in the past
-            if then < now:
-                # Move the hour:min time to next day
-                then = now.replace(day=now.day+1, hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+            then = GUIServer.GET_END_CHARGE_DATETIME(end_charge_time)
+
             tmp_time_intervals = []
             for time_interval in time_intervals:
                 if then < time_interval:
