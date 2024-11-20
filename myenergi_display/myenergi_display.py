@@ -306,6 +306,24 @@ class RegionalElectricity(object):
     SLOT_STOP_DATETIME = "SLOT_STOP_DATETIME"
     SLOT_COST = "SLOT_COST"
 
+    @staticmethod
+    def Get_next_30_min_time():
+        """@brief Get the next time on a 30 minute boundary. On the hour or half hour.
+           @return A datetime instance on the next hour or half hour boundary."""
+        now = datetime.now().astimezone()
+        print(f"PJA: now={now}")
+        # Add 30 mins in the future
+        next_dt = now + timedelta(minutes=30)
+        print(f"PJA: next_dt={next_dt}")
+        if next_dt.minute > 30:
+            next_dt = next_dt.replace(minute=30, second=0, microsecond=0)
+            print(f"PJA: 1 next_dt={next_dt}")
+        else:
+            next_dt = next_dt.replace(minute=00, second=0, microsecond=0)
+            print(f"PJA: 2 next_dt={next_dt}")
+        print(f"PJA: 3 next_dt={next_dt}")
+        return next_dt
+
     def __init__(self, uio):
         """@brief Constructor
            @param uio A UIO instance."""
@@ -337,6 +355,7 @@ class RegionalElectricity(object):
                    0 = A list of timestamps. This includes the start and end of each 1/2 hour slot.
                    1 = The price of electricity in £ in that 1/2 hour slot.
                    2 = The end of charge date time object or None if not defined."""
+        start_datetime = RegionalElectricity.Get_next_30_min_time()
 
         costDict = self._get_cost_dict(region_code)
         now = datetime.now().astimezone()
@@ -360,8 +379,15 @@ class RegionalElectricity(object):
             cost = costDict[ts]/100.0
             # Add the end of this 1/2 hour slot
             costList.append(cost)
-#            timeStampList.append(ts++ timedelta(minutes=30))
-#            costList.append(costDict[ts]/100.0)
+
+        # If we don't have an end of charge time defined
+        if not end_charge_datetime:
+            # Ensure we have a defined end time (2 days in the future on an hour boundary)
+            # This should not interfere with the charge calculation if the octopus agile tariff is selected.
+            now = datetime.now().astimezone()
+            end_charge_datetime = now + timedelta(hours=48)
+            end_charge_datetime = end_charge_datetime.replace(minute=0, second=0, microsecond=0)
+
         return (timeStampList, costList, end_charge_datetime)
 
 
@@ -1132,17 +1158,14 @@ class GUIServer(object):
         """@brief Get the tariff data needed to calculate the best charge times when not
                   one octopus agile tariff.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed."""
-        now = datetime.now().astimezone()
-
-        # Ensure we start from a time at least 30 mins in the future
-        start_datetime = now + timedelta(minutes=60)
-        start_datetime = start_datetime.replace(minute=0, second=0, microsecond=0)
+        start_datetime = RegionalElectricity.Get_next_30_min_time()
 
         # Get a value for every 1/2 hour through the day and into the next
         time_intervals = [start_datetime + timedelta(minutes=30 * i) for i in range((48*2))]
 
         # If the end charge time is defined then ensure we don't have time after this in the list.
         if end_charge_time:
+            now = datetime.now().astimezone()
             then = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
             # If this time is in the past
             if then < now:
