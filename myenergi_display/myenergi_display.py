@@ -351,10 +351,9 @@ class RegionalElectricity(object):
                    0 = A list of timestamps. This includes the start and end of each 1/2 hour slot.
                    1 = The price of electricity in £ in that 1/2 hour slot.
                    2 = The end of charge date time object or None if not defined."""
-        start_datetime = RegionalElectricity.GET_NEXT_30_MIN_TIME()
 
         costDict = self._get_cost_dict(region_code)
-        now = datetime.now().astimezone()
+        next_30_min_datetime = RegionalElectricity.GET_NEXT_30_MIN_TIME()
         _timeStampList = list(costDict.keys())
         _timeStampList.sort()
         # If the user requires the charge to be complete by a certain time
@@ -366,7 +365,7 @@ class RegionalElectricity(object):
         costList = []
         for ts in _timeStampList:
             # Ignore all times that are in the past
-            if ts < now:
+            if ts < next_30_min_datetime:
                 continue
             # Ignore times after the end charge time
             if end_charge_datetime and ts > end_charge_datetime:
@@ -812,14 +811,14 @@ class GUIServer(object):
         self._enable_octopus_agile_tariff(octopus_agile_tariff)
         if octopus_agile_tariff:
             self._add_tariff_value_button.disable()
-#            self._plot_tariff_button.disable()
+# PJA           self._plot_tariff_button.disable()
             self._clear_tariff_value_button.disable()
             if self._other_tariff_plot_container:
                 self._other_tariff_plot_container.clear()
 
         else:
             self._add_tariff_value_button.enable()
-#            self._plot_tariff_button.enable()
+# PJA           self._plot_tariff_button.enable()
             self._clear_tariff_value_button.enable()
             self._plot_tariff()
 
@@ -917,15 +916,12 @@ class GUIServer(object):
             price = tariff_data[0][1]
             for data in tariff_data:
                 dt = data[0]
-#                if _datetime < dt:
-#                    break
 
                 if _datetime.hour < dt.hour:
                     break
                 elif _datetime.hour == dt.hour and _datetime.minute < dt.minute:
                     break
-#                elif _datetime.hour == dt.hour and datetime.minute < dt.minute:
-#                    break
+
                 price = data[1]
         return price
 
@@ -967,7 +963,6 @@ class GUIServer(object):
                                   zerolinecolor="gray",   # Zero line color
                                   range=[0, max_cost*1.5]
                               ),)
-    #        fig.add_trace(go.Scatter(x=time_intervals, y=prices, marker=dict(color='green')))
             fig.add_trace(go.Bar(x=time_intervals, y=prices, marker=dict(color='green')))
             if self._other_tariff_plot_container:
                 self._other_tariff_plot_container.clear()
@@ -1072,8 +1067,32 @@ class GUIServer(object):
 
     def _get_zappi_charge(self):
         """@brief Get the current zappi charge schedule."""
-        pass
-        #PJA TODO
+        threading.Thread(target=self._get_zappi_charge_thread).start()
+
+    def _get_zappi_schedule_day(self, bdd_str):
+        """@brief Get the """
+    def _get_zappi_charge_thread(self):
+        """@brief read the zappi charge data"""
+        try:
+            zappi_stats_dict = self._my_energi.get_zappi_stats()
+            if "boost_times" in zappi_stats_dict:
+                for boost_dict in zappi_stats_dict["boost_times"]:
+                    if "bdd" in boost_dict:
+                        pass
+# PJA
+#            "bdd": "00010000",
+#            "bdh": 1,
+#            "bdm": 30,
+#            "bsh": 21,
+#            "bsm": 30,
+#            "slt": 11
+            pretty = json.dumps(zappi_stats_dict, indent=4, sort_keys=True)
+            print(f"PJA: zappi_stats={pretty}")
+
+        except Exception as ex:
+            msg_dict = {}
+            msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
+            self._update_gui(msg_dict)
 
     def _set_zappi_charge_active(self, active):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
@@ -1172,6 +1191,8 @@ class GUIServer(object):
                 # Move the hour:min time to next day
                 then = now.replace(day=now.day+1, hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
                 end_charge_datetime = then
+            else:
+                end_charge_datetime = then
         return end_charge_datetime
 
     def _get_tariff_data(self, end_charge_time):
@@ -1179,7 +1200,6 @@ class GUIServer(object):
                   one octopus agile tariff.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed."""
         start_datetime = RegionalElectricity.GET_NEXT_30_MIN_TIME()
-
         # Get a value for every 1/2 hour through the day and into the next
         time_intervals = [start_datetime + timedelta(minutes=30 * i) for i in range((48*2))]
 
@@ -1339,12 +1359,7 @@ class GUIServer(object):
                               ),)
             fig.add_trace(go.Bar(x=plot_time_stamp_list, y=plot_cost_list, opacity=0.5, marker=dict(color='green')))
 
-            for charge_slot_dict in charge_slot_dict_list:
-                startT = charge_slot_dict[RegionalElectricity.SLOT_START_DATETIME]
-                stopT = charge_slot_dict[RegionalElectricity.SLOT_STOP_DATETIME]
-                x = [startT, stopT]
-                y = [charge_slot_dict[RegionalElectricity.SLOT_COST], charge_slot_dict[RegionalElectricity.SLOT_COST]]
-                fig.add_trace(go.Scatter(x=x, y=y, line=dict(width=5), marker=dict(size=10, color='red')))
+            self._plot_charge_times(fig, charge_slot_dict_list)
 
             # Add the new plot to the container
             with plot_container:
@@ -1361,6 +1376,17 @@ class GUIServer(object):
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
+
+    def _plot_charge_times(self, fig, charge_slot_dict_list):
+        """@brief Plot the charge times in red on the charge plot.
+           @param fig plotly figure as returned from go.Figure()
+           @param charge_slot_dict_list"""
+        for charge_slot_dict in charge_slot_dict_list:
+            startT = charge_slot_dict[RegionalElectricity.SLOT_START_DATETIME]
+            stopT = charge_slot_dict[RegionalElectricity.SLOT_STOP_DATETIME]
+            x = [startT, stopT]
+            y = [charge_slot_dict[RegionalElectricity.SLOT_COST], charge_slot_dict[RegionalElectricity.SLOT_COST]]
+            fig.add_trace(go.Scatter(x=x, y=y, line=dict(width=5), marker=dict(size=10, color='red')))
 
     def _set_zappi_charge(self):
         """@brief """
