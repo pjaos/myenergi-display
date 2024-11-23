@@ -63,6 +63,12 @@ class MyEnergi(object):
         if self._zappi_serial_number is None:
             raise Exception("BUG: The zappi serial number has not been set.")
 
+    def get_stats(self):
+        """@brief Get the stats of the eddi unit."""
+        self._check_eddi_serial_number()
+        url = MyEnergi.BASE_URL + "cgi-jstatus-*"
+        return self._exec_api_cmd(url)
+
     def get_eddi_stats(self):
         """@brief Get the stats of the eddi unit."""
         self._check_eddi_serial_number()
@@ -88,6 +94,8 @@ class MyEnergi(object):
         bottom_tank_temp = None
         heater_kwh = None
         response_dict = self.get_eddi_stats()
+#        response_dict = self.get_stats()[0]
+        print(f"PJA: response_dict={response_dict}")
         if 'eddi' in response_dict:
             eddi_dict = response_dict['eddi'][0]
             # Top tank temperature
@@ -395,6 +403,9 @@ class GUIServer(object):
     ELECTRICITY_REGION_CODE = 'ELECTRICITY_REGION_CODE'
     OCTOPUS_AGILE_TARIFF = 'OCTOPUS_AGILE_TARIFF'
     TARIFF_POINT_LIST = "TARIFF_POINT_LIST"
+    EV_BATTERY_KWH = "EV_BATTERY_KWH"
+    CURRENT_EV_CHARGE_PERCENTAGE = "CURRENT_EV_CHARGE_PERCENTAGE"
+    TARGET_EV_CHARGE_PERCENTAGE = "TARGET_EV_CHARGE_PERCENTAGE"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -402,13 +413,17 @@ class GUIServer(object):
                       ZAPPI_MAX_CHARGE_RATE: "7.4",
                       ELECTRICITY_REGION_CODE: "",
                       OCTOPUS_AGILE_TARIFF: True,
-                      TARIFF_POINT_LIST: []}
+                      TARIFF_POINT_LIST: [],
+                      EV_BATTERY_KWH: "0",
+                      CURRENT_EV_CHARGE_PERCENTAGE: 20,
+                      TARGET_EV_CHARGE_PERCENTAGE: 80}
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
     TEXT_STYLE_A_SIZE = 'font-size: 20px;'
     TEXT_STYLE_B = 'font-size: 40px; color: lightgreen;'
     TEXT_STYLE_C = 'font-size: 15px; color: lightgreen;'
+    TEXT_STYLE_D_SIZE = 'font-size: 40px;'
 
     BOOST_1_ON = "BOOST_1_SET_ON"
     BOOST_2_ON = "BOOST_2_SET_ON"
@@ -469,6 +484,7 @@ class GUIServer(object):
             self._cfg_mgr.load()
             self._create_myenergi()
             self._other_tariff_values = self._cfg_mgr.getAttr(GUIServer.TARIFF_POINT_LIST)
+
         except Exception:
             # If config does not exist we use the defaults
             pass
@@ -479,20 +495,21 @@ class GUIServer(object):
         self._my_energi.set_eddi_serial_number(self._cfg_mgr.getAttr(GUIServer.EDDI_SERIAL_NUMBER))
         self._my_energi.set_zappi_serial_number(self._cfg_mgr.getAttr(GUIServer.ZAPPI_SERIAL_NUMBER))
 
-    def _save_config(self):
-        """@brief Save some parameters to a local config file."""
+    def _save_config(self, show_info=True):
+        """@brief Save some parameters to a local config file.
+           @param show_info If True then show info messages."""
 
         region_code = self._electricity_region_code.value
         if region_code is None or region_code not in RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS:
             ui.notify("ERROR: Electricity region code not set.", type='negative')
 
         else:
-            if self._check_eddi_access_ok():
+            if self._check_eddi_access_ok(show_info=show_info):
                 self._cfg_mgr.addAttr(GUIServer.ELECTRICITY_REGION_CODE, region_code)
                 self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY,    self._api_key.value)
                 self._cfg_mgr.addAttr(GUIServer.EDDI_SERIAL_NUMBER,  self._eddi_serial_number.value)
                 # If a zappi serial number has been entered and the zappi cannot be reached.
-                if len(self._zappi_serial_number.value) > 0 and not self._check_zappi_access_ok():
+                if len(self._zappi_serial_number.value) > 0 and not self._check_zappi_access_ok(show_info=show_info):
                     # Don't proceed with saving
                     return
                 self._cfg_mgr.addAttr(GUIServer.ZAPPI_SERIAL_NUMBER, self._zappi_serial_number.value)
@@ -509,10 +526,17 @@ class GUIServer(object):
                 octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
                 self._cfg_mgr.addAttr(GUIServer.OCTOPUS_AGILE_TARIFF, octopus_agile_tariff)
                 self._cfg_mgr.addAttr(GUIServer.TARIFF_POINT_LIST, self._other_tariff_values)
+
+                self._cfg_mgr.addAttr(GUIServer.EV_BATTERY_KWH, self._ev_kwh.value)
+
+                self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_slider.value)
+                self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_slider.value)
+
                 self._cfg_mgr.store()
                 # Create a new instance of the interface to talk to the myenergi products
                 self._create_myenergi()
-                ui.notify(f"Saved to {self._cfg_mgr._getConfigFile()}")
+                if show_info:
+                    ui.notify(f"Saved to {self._cfg_mgr._getConfigFile()}")
 
     def _is_octopus_agile_tariff_enabled(self):
         """@brief Determine if the user has selectedt the Octopus agile tariff.
@@ -776,6 +800,11 @@ class GUIServer(object):
                                                     value="7.4",
                                                     with_input=True,
                                                     label='Zappi charge rate')
+
+        with ui.row():
+            kwh = self._cfg_mgr.getAttr(GUIServer.EV_BATTERY_KWH)
+            self._ev_kwh = ui.number(label='EV Battery (kWh)', value = kwh, format='%.1f')
+
         with ui.row():
             self._electricity_region_code = ui.select(options=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS,
                                                       value=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS[0],
@@ -1000,21 +1029,23 @@ class GUIServer(object):
         if self._other_tariff_plot_container:
             self._other_tariff_plot_container.clear()
 
-    def _check_eddi_access_ok(self):
+    def _check_eddi_access_ok(self, show_info=True):
         """@brief Check that the stats can be read from the myenergi eddi unit.
+           @param show_info If True then show info messages.
            @return True if eddi access ok."""
         ok = False
         try:
             myEnergi = MyEnergi(self._api_key.value)
             myEnergi.set_eddi_serial_number(self._eddi_serial_number.value)
             myEnergi.get_eddi_stats()
-            ui.notify("Successfully read eddi stats.", position='center')
+            if show_info:
+                ui.notify("Successfully read eddi stats.", position='center')
             ok = True
         except Exception as ex:
             ui.notify(f"EDDI ERROR: {str(ex)}", type='negative')
         return ok
 
-    def _check_zappi_access_ok(self):
+    def _check_zappi_access_ok(self, show_info=True):
         """@brief Check that the stats can be read from the myenergi zappi unit.
            @return True if eddi access ok."""
         ok = False
@@ -1023,7 +1054,8 @@ class GUIServer(object):
             myEnergi.set_eddi_serial_number(self._eddi_serial_number.value)
             myEnergi.set_zappi_serial_number(self._zappi_serial_number.value)
             myEnergi.get_zappi_stats()
-            ui.notify("Successfully read zappi stats.", position='center')
+            if show_info:
+                ui.notify("Successfully read zappi stats.", position='center')
             ok = True
         except Exception as ex:
             ui.notify(f"ZAPPI ERROR: {str(ex)}", type='negative')
@@ -1055,17 +1087,18 @@ class GUIServer(object):
 
     def _init_zappi_tab(self):
         """@brief Init the tab used for access to ZAPPI stats and control."""
-        ui.label('Charge (kWh)')
-        with ui.row().classes('w-full'):
-            self._charge_slider = ui.slider(min=0, max=100, value=0, step=1).style("width: 250px;")
-            with ui.column():
-                ui.label().bind_text_from(self._charge_slider, 'value').style(GUIServer.TEXT_STYLE_B)
 
-        ui.label('Charge (minutes)')
         with ui.row().classes('w-full'):
-            self._charge_time_mins_slider = ui.slider(min=0, max=539, value=0, step=15).style("width: 250px;")
-            with ui.column():
-                ui.label().bind_text_from(self._charge_time_mins_slider, 'value').style(GUIServer.TEXT_STYLE_B)
+            with ui.row().classes('w-full'):
+                ui.label('Target EV charge (%)')
+                self._target_ev_charge_slider = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._target_ev_charge_slider.value = self._cfg_mgr.getAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE)
+
+        with ui.row().classes('w-full'):
+            with ui.row().classes('w-full'):
+                ui.label('Current EV charge (%)')
+                self._current_ev_charge_slider = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._current_ev_charge_slider.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
 
         # Put this off the bottom of the mobile screen as most times it will not be needed
         # and there is not enough room on the mobile screen above the plot pane.
@@ -1130,6 +1163,7 @@ class GUIServer(object):
                              bdm,
                              bsh,
                              bsm):
+        """@return A row of values from the myenergi zappi charge schedules."""
         day_list = self._get_sched_day_list(bdd)
         duration = f"{bdh:02d}:{bdm:02d}"
         start_time = f"{bsh:02d}:{bsm:02d}"
@@ -1250,9 +1284,32 @@ class GUIServer(object):
 
     def _calc_optimal_charge_times(self):
         """@brief Calculate the optimal charge times."""
-        charge = float(self._charge_slider.value)
-        charge_time_mins = float(self._charge_time_mins_slider.value)
+        self._save_config(show_info=False)
 
+        current_ev_charge_percentage = float(self._current_ev_charge_slider.value)
+        target_ev_charge_percentage = float(self._target_ev_charge_slider.value)
+        ev_battery_kwh = self._ev_kwh.value
+
+        target_charge_factor = target_ev_charge_percentage/100.0
+        current_charge_factor = current_ev_charge_percentage/100.0
+
+        if target_ev_charge_percentage > 100:
+            ui.notify("The target EV charge cannot be greater than 100 %.", type='negative')
+            return
+
+        if current_charge_factor > 1.0:
+            ui.notify("The current EV charge cannot be greater than 100 %.", type='negative')
+            return
+
+        # If the current charge factor is greater than is already present in the battery
+        if current_charge_factor >= target_charge_factor:
+            ui.notify(f"The current charge ({current_ev_charge_percentage:.1f} %) is greater than target charge of {current_ev_charge_percentage:.1f} %.", type='negative')
+            return
+
+        required_charge_factor = target_charge_factor - current_charge_factor
+        charge  = required_charge_factor * ev_battery_kwh
+
+        charge_time_mins = 0
         if charge == 0 and charge_time_mins == 0 or \
            charge != 0 and charge_time_mins != 0:
             ui.notify("You must set either the charge or charge time greater than 0.", type='negative')
