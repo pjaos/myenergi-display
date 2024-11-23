@@ -1208,7 +1208,7 @@ class GUIServer(object):
     def _show_get_msg_delay(self):
         """@brief Show  messge to indicate to the user it may take a while before the
                   myenergi zappi schedule is updated."""
-        ui.notify("The myenergi zappi schedule may take 5 mins or more to update after they are changed.")
+        ui.notify("The myenergi zappi schedule may take 5 mins or more to update after it is changed.")
 
     def _get_input_time_field(self, label):
         """@brief Add a control to allow the user to enter the time as an hour and min.
