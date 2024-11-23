@@ -252,7 +252,7 @@ class MyEnergi(object):
             charge_str_list.append(charge_str)
 
         # Remove any existing charge schedules.
-# PJA If this is executed then the charge schedule fails to get set !!!
+# PJA If this is executed then the charge schedule fails to get set.
 #        self.set_all_zappi_schedules_off()
 
         # Zappi must be in eco+ mode to use schedule
@@ -423,6 +423,23 @@ class GUIServer(object):
     SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE = "Set zappi charge schedule"
     DEFAULT_BUTTON_COLOR = "blue"
     CLEARED_ALL_CHARGING_SCHEDULES = "Cleared all zappi charging schedules."
+    ZAPPI_CHARGE_SCHEDULE = "ZAPPI_CHARGE_SCHEDULE"
+
+    BOOST_TIMES_KEY = "boost_times"
+    BDD_BOOST_DICT_KEY = 'bdd'
+    BDH_BOOST_DICT_KEY = 'bdh'
+    BDM_BOOST_DICT_KEY = 'bdm'
+    BSH_BOOST_DICT_KEY = 'bsh'
+    BSM_BOOST_DICT_KEY = 'bsm'
+    SLT_BOOST_DICT_KEY = 'slt'
+
+    BOOST_DICT_KEYS = [BDD_BOOST_DICT_KEY,
+                       BDH_BOOST_DICT_KEY,
+                       BDM_BOOST_DICT_KEY,
+                       BSH_BOOST_DICT_KEY,
+                       BSM_BOOST_DICT_KEY,
+                       SLT_BOOST_DICT_KEY
+                       ]
 
     def __init__(self, uio, port):
         """@brief Constructor
@@ -639,6 +656,10 @@ class GUIServer(object):
             top_tank_temp, bottom_tank_temp = rxDict[GUIServer.TANK_TEMPERATURES]
             self._topTankTempLabel.text = top_tank_temp
             self._bottomTankTempLabel.text = bottom_tank_temp
+
+        elif GUIServer.ZAPPI_CHARGE_SCHEDULE in rxDict:
+            zappi_charge_table = rxDict[GUIServer.ZAPPI_CHARGE_SCHEDULE]
+            self._display_zappi_charge_table(zappi_charge_table)
 
     def _init_eddi_tab(self):
         """@brief Init the tab used for access to EDDI stats and control."""
@@ -1058,7 +1079,7 @@ class GUIServer(object):
             self._calc_button = ColorButton(self._calc_optimal_charge_times, 'Calc')
             self._calc_button.tooltip("Calculate the optimal charge time/s.")
             self._set_button = ColorButton(self._set_zappi_charge, 'Set')
-            self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.\nGreen when the charger has accepted the schedule.')
+            self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.')
             self._get_button = ColorButton(self._get_zappi_charge, 'Get')
             self._get_button.tooltip('Get the current charge schedule on your zappi.')
 
@@ -1067,27 +1088,87 @@ class GUIServer(object):
 
     def _get_zappi_charge(self):
         """@brief Get the current zappi charge schedule."""
+        ui.notify("Reading the zappi charge shedules.")
         threading.Thread(target=self._get_zappi_charge_thread).start()
 
-    def _get_zappi_schedule_day(self, bdd_str):
-        """@brief Get the """
+    def _is_valid_boost_dict(self, boost_dict):
+        """@brief Determine if the boost dict is valid.
+           @return True if all the reuired keys are present in the boost dict."""
+        key_count = 0
+        for key in GUIServer.BOOST_DICT_KEYS:
+            if key in boost_dict:
+                key_count = key_count + 1
+        valid = False
+        if key_count == 6:
+            valid = True
+        return valid
+
+    def _get_sched_day_list(self, bdd):
+        """@brief Get a list of days that a schedule applies to.
+           @return A comma separated list of three letter day names."""
+        day_list = []
+        if len(bdd) == 8:
+            if bdd[1] == '1':
+                day_list.append('Mon')
+            elif bdd[2] == '1':
+                day_list.append('Tue')
+            elif bdd[3] == '1':
+                day_list.append('Wed')
+            elif bdd[4] == '1':
+                day_list.append('Thu')
+            elif bdd[5] == '1':
+                day_list.append('Fri')
+            elif bdd[6] == '1':
+                day_list.append('Sat')
+            elif bdd[7] == '1':
+                day_list.append('Sun')
+        return ",".join(day_list)
+
+    def _get_sched_table_row(self,
+                             bdd,
+                             bdh,
+                             bdm,
+                             bsh,
+                             bsm):
+        day_list = self._get_sched_day_list(bdd)
+        duration = f"{bdh:02d}:{bdm:02d}"
+        start_time = f"{bsh:02d}:{bsm:02d}"
+        table_row = None
+        table_row = (start_time, duration, day_list)
+        return table_row
+
+    def _send_zappi_sched_to_gui(self, table_row_list):
+        """@brief After having read the zappi schedule list from the myenergy system
+                  send it to the GUI.
+           @param table_row_list A list of rows to add to the zappi charge table."""
+        msg_dict = {}
+        msg_dict[GUIServer.ZAPPI_CHARGE_SCHEDULE] = table_row_list
+        self._update_gui(msg_dict)
+
     def _get_zappi_charge_thread(self):
         """@brief read the zappi charge data"""
+        table_row_list = []
         try:
             zappi_stats_dict = self._my_energi.get_zappi_stats()
-            if "boost_times" in zappi_stats_dict:
-                for boost_dict in zappi_stats_dict["boost_times"]:
-                    if "bdd" in boost_dict:
-                        pass
-# PJA
-#            "bdd": "00010000",
-#            "bdh": 1,
-#            "bdm": 30,
-#            "bsh": 21,
-#            "bsm": 30,
-#            "slt": 11
-            pretty = json.dumps(zappi_stats_dict, indent=4, sort_keys=True)
-            print(f"PJA: zappi_stats={pretty}")
+            if GUIServer.BOOST_TIMES_KEY in zappi_stats_dict:
+                for boost_dict in zappi_stats_dict[GUIServer.BOOST_TIMES_KEY]:
+                    if self._is_valid_boost_dict(boost_dict):
+                        bdd = boost_dict[GUIServer.BDD_BOOST_DICT_KEY]
+                        bdh = boost_dict[GUIServer.BDH_BOOST_DICT_KEY]
+                        bdm = boost_dict[GUIServer.BDM_BOOST_DICT_KEY]
+                        bsh = boost_dict[GUIServer.BSH_BOOST_DICT_KEY]
+                        bsm = boost_dict[GUIServer.BSM_BOOST_DICT_KEY]
+                        table_row = self._get_sched_table_row(bdd,
+                                                              bdh,
+                                                              bdm,
+                                                              bsh,
+                                                              bsm)
+                        # PJAif table_row:
+                        table_row_list.append(table_row)
+            msg_dict = {}
+            msg_dict[GUIServer.INFO_MESSAGE] = "Read the zappi charge shedules."
+            self._update_gui(msg_dict)
+            self._send_zappi_sched_to_gui(table_row_list)
 
         except Exception as ex:
             msg_dict = {}
@@ -1102,6 +1183,32 @@ class GUIServer(object):
             self._calc_button.disable()
         else:
             self._calc_button.enable()
+
+    def _display_zappi_charge_table(self, zappi_charge_sched_table):
+        """@brief Display the table of configured zappi charge schedules.
+           @param zappi_charge_sched_table A list of rows in the zappi charge schedule table."""
+        # If we have somewhere to display the table.
+        if self._plot_container:
+            # Clear it's current contents.
+            self._plot_container.clear()
+            # Add the table to the displayed gui
+            with self._plot_container:
+                columns = [
+                    {'name': 'Time', 'label': 'Time', 'field': 'Time', 'required': True, 'align': 'left'},
+                    {'name': 'Duration', 'label': 'Duration', 'field': 'Duration', 'sortable': True},
+                    {'name': 'Days', 'label': 'Days', 'field': 'Days', 'sortable': True},
+                ]
+                rows = []
+                for row in zappi_charge_sched_table:
+                    rows.append( {'Time': row[0], 'Duration': row[1], 'Days': row[2]} )
+                ui.table(columns=columns, rows=rows, row_key='name')
+                ui.run()
+        ui.timer(once=True, interval=2.0, callback=self._show_get_msg_delay)
+
+    def _show_get_msg_delay(self):
+        """@brief Show  messge to indicate to the user it may take a while before the
+                  myenergi zappi schedule is updated."""
+        ui.notify("The myenergi zappi schedule may take 5 mins or more to update after they are changed.")
 
     def _get_input_time_field(self, label):
         """@brief Add a control to allow the user to enter the time as an hour and min.
@@ -1389,7 +1496,7 @@ class GUIServer(object):
             fig.add_trace(go.Scatter(x=x, y=y, line=dict(width=5), marker=dict(size=10, color='red')))
 
     def _set_zappi_charge(self):
-        """@brief """
+        """@brief Set a zappi charge schedule."""
         if self._charge_slot_dict_list is None:
             ui.notify("No charge schedule found.", type='negative')
         else:
