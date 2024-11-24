@@ -1299,7 +1299,7 @@ class GUIServer(object):
                 for row in zappi_charge_sched_table:
                     rows.append({'Time': row[0], 'Duration': row[1], 'Days': row[2]})
                 ui.table(columns=columns, rows=rows, row_key='name')
-                ui.run()
+
         ui.timer(once=True, interval=2.0, callback=self._show_get_msg_delay)
 
     def _show_get_msg_delay(self):
