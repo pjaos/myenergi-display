@@ -569,8 +569,8 @@ class GUIServer(object):
 
                 self._cfg_mgr.addAttr(GUIServer.EV_BATTERY_KWH, self._ev_kwh.value)
 
-                self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_slider.value)
-                self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_slider.value)
+                self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_input.value)
+                self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_input.value)
 
                 self._cfg_mgr.store()
 
@@ -1149,14 +1149,14 @@ class GUIServer(object):
         with ui.row().classes('w-full'):
             with ui.row().classes('w-full'):
                 ui.label('Target EV charge (%)')
-                self._target_ev_charge_slider = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
-            self._target_ev_charge_slider.value = self._cfg_mgr.getAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE)
+                self._target_ev_charge_input = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._target_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE)
 
         with ui.row().classes('w-full'):
             with ui.row().classes('w-full'):
                 ui.label('Current EV charge (%)')
-                self._current_ev_charge_slider = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
-            self._current_ev_charge_slider.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
+                self._current_ev_charge_input = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._current_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
 
         # Put this off the bottom of the mobile screen as most times it will not be needed
         # and there is not enough room on the mobile screen above the plot pane.
@@ -1255,6 +1255,7 @@ class GUIServer(object):
                                                               bdm,
                                                               bsh,
                                                               bsm)
+                        # PJAif table_row:
                         table_row_list.append(table_row)
 
             msg_dict = {}
@@ -1304,7 +1305,7 @@ class GUIServer(object):
     def _show_get_msg_delay(self):
         """@brief Show  messge to indicate to the user it may take a while before the
                   myenergi zappi schedule is updated."""
-        ui.notify("The myenergi zappi schedule may take 5 mins or more to update after it is changed.")
+        ui.notify("The myenergi zappi schedule may take several mins to update after it is changed.")
 
     def _get_input_time_field(self, label):
         """@brief Add a control to allow the user to enter the time as an hour and min.
@@ -1348,8 +1349,8 @@ class GUIServer(object):
         """@brief Calculate the optimal charge times."""
         self._save_config(show_info=False)
 
-        current_ev_charge_percentage = float(self._current_ev_charge_slider.value)
-        target_ev_charge_percentage = float(self._target_ev_charge_slider.value)
+        current_ev_charge_percentage = float(self._current_ev_charge_input.value)
+        target_ev_charge_percentage = float(self._target_ev_charge_input.value)
         ev_battery_kwh = self._ev_kwh.value
 
         target_charge_factor = target_ev_charge_percentage/100.0
@@ -1380,7 +1381,7 @@ class GUIServer(object):
         if charge > 0:
             charge_time_mins = int((charge/float(self._zappi_max_charge_rate.value))*60)
             # Ensure a multiple of 15 mins as we don't want to be turning the charger on/off
-            # any more quickly than this.
+            # any more quickly than this. MyEnergi only allows charge times in chunks of 15 mins.
             remainder = charge_time_mins % 15
             if remainder > 0:
                 charge_time_mins = charge_time_mins - remainder
@@ -1621,7 +1622,13 @@ class GUIServer(object):
             with self._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
                 kwh = hours_charge_factor*float(self._zappi_max_charge_rate.value)
-                ui.label(f"{kwh:.1f} kWh over {total_charge_mins:.0f} mins (£{cost:.2f})")
+                current_ev_charge_percentage = self._current_ev_charge_input.value
+                battery_capacity_kwh = self._ev_kwh.value
+                current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
+                battery_charged_kwh = current_battery_kwh+kwh
+                battery_charged_percentage = (battery_charged_kwh/battery_capacity_kwh)*100.0
+# PJA               ui.label(f"{kwh:.1f} kWh over {total_charge_mins:.0f} mins (£{cost:.2f})")
+                ui.label(f"Add {kwh:.1f} kWh to give {battery_charged_percentage:.0f} % (£{cost:.2f})")
 
             self._charge_slot_dict_list = charge_slot_dict_list
 
