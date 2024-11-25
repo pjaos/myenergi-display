@@ -654,6 +654,10 @@ class GUIServer(object):
                 self._cfg_mgr.addAttr(GUIServer.OCTOPUS_AGILE_TARIFF, octopus_agile_tariff)
                 self._cfg_mgr.addAttr(GUIServer.TARIFF_POINT_LIST, self._other_tariff_values)
 
+                if self._ev_kwh.value <= 0:
+                    ui.notify("Set an EV battery capacity greater than 0.", type='negative')
+                    return
+
                 self._cfg_mgr.addAttr(GUIServer.EV_BATTERY_KWH, self._ev_kwh.value)
 
                 self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_input.value)
@@ -1373,6 +1377,10 @@ class GUIServer(object):
         target_ev_charge_percentage = float(self._target_ev_charge_input.value)
         ev_battery_kwh = self._ev_kwh.value
 
+        if ev_battery_kwh <= 0.0:
+            ui.notify("Please set an EV battery capacity greater than 0 in the settings tab.", type='negative')
+            return
+
         target_charge_factor = target_ev_charge_percentage/100.0
         current_charge_factor = current_ev_charge_percentage/100.0
 
@@ -1389,8 +1397,8 @@ class GUIServer(object):
             ui.notify(f"The current charge ({current_ev_charge_percentage:.1f} %) is greater than target charge of {target_ev_charge_percentage:.1f} %.", type='negative')
             return
 
-        required_charge_factor = target_charge_factor - current_charge_factor
-        charge = required_charge_factor * ev_battery_kwh
+        required_charge_factor = float(target_charge_factor - current_charge_factor)
+        charge = required_charge_factor * float(ev_battery_kwh)
 
         charge_time_mins = 0
         if charge == 0 and charge_time_mins == 0 or \
@@ -1647,8 +1655,8 @@ class GUIServer(object):
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
                 battery_charged_kwh = current_battery_kwh+kwh
                 battery_charged_percentage = (battery_charged_kwh/battery_capacity_kwh)*100.0
-                ui.label(f"Charge for {int(total_charge_mins)} minutes to give {battery_charged_percentage:.0f} % charge.")
-                ui.label(f"This use {kwh:.1f} kWh of energy (cost = £{cost:.2f}).")
+                ui.label(f"Charge for {int(total_charge_mins)} minutes to reach {battery_charged_percentage:.0f}%")
+                ui.label(f"using {kwh:.1f} kWh of energy (cost = £{cost:.2f}).")
 
             self._charge_slot_dict_list = charge_slot_dict_list
 
