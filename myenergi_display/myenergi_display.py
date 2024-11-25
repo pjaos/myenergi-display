@@ -187,10 +187,10 @@ class MyEnergi(object):
                     bsh = boost_dict[GUIServer.BSH_BOOST_DICT_KEY]
                     bsm = boost_dict[GUIServer.BSM_BOOST_DICT_KEY]
                     table_row = self._get_sched_table_row(bdd,
-                                                            bdh,
-                                                            bdm,
-                                                            bsh,
-                                                            bsm)
+                                                          bdh,
+                                                          bdm,
+                                                          bsh,
+                                                          bsm)
                     table_row_list.append(table_row)
         return table_row_list
 
