@@ -532,6 +532,7 @@ class GUIServer(object):
     EV_BATTERY_KWH = "EV_BATTERY_KWH"
     CURRENT_EV_CHARGE_PERCENTAGE = "CURRENT_EV_CHARGE_PERCENTAGE"
     TARGET_EV_CHARGE_PERCENTAGE = "TARGET_EV_CHARGE_PERCENTAGE"
+    READY_BY = "READY_BY"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -542,7 +543,8 @@ class GUIServer(object):
                       TARIFF_POINT_LIST: [],
                       EV_BATTERY_KWH: "0",
                       CURRENT_EV_CHARGE_PERCENTAGE: 20,
-                      TARGET_EV_CHARGE_PERCENTAGE: 80}
+                      TARGET_EV_CHARGE_PERCENTAGE: 80,
+                      READY_BY: ""}
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
@@ -550,6 +552,7 @@ class GUIServer(object):
     TEXT_STYLE_B = 'font-size: 40px; color: lightgreen;'
     TEXT_STYLE_C = 'font-size: 15px; color: lightgreen;'
     TEXT_STYLE_D_SIZE = 'font-size: 40px;'
+    TEXT_STYLE_E_SIZE = 'font-size: 30px;'
 
     BOOST_1_ON = "BOOST_1_SET_ON"
     BOOST_2_ON = "BOOST_2_SET_ON"
@@ -662,6 +665,7 @@ class GUIServer(object):
 
                 self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_input.value)
                 self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_input.value)
+                self._cfg_mgr.addAttr(GUIServer.READY_BY, self._end_charge_time_input.value)
 
                 self._cfg_mgr.store()
 
@@ -1248,6 +1252,7 @@ class GUIServer(object):
         # Put this off the bottom of the mobile screen as most times it will not be needed
         # and there is not enough room on the mobile screen above the plot pane.
         self._end_charge_time_input = self._get_input_time_field('Ready by')
+        self._end_charge_time_input.value = self._cfg_mgr.getAttr(GUIServer.READY_BY)
 
         with ui.row():
             # A plot of energy costs is added to this container when the users requests it
@@ -1339,12 +1344,11 @@ class GUIServer(object):
         # and there is not enough room on the mobile screen above the plot pane.
         with ui.row().classes('w-full'):
             ui.label(label)
-            time_input = ui.input("Time (HH:MM)")
+            time_input = ui.input("(HH:MM)").style("width: 250px; "+GUIServer.TEXT_STYLE_E_SIZE)
             with time_input as time:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.time().bind_value(time):
-                        with ui.row().classes('justify-end'):
-                            ui.button('Close', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=menu.close).props('flat')
+                        ui.button('Close', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=menu.close).props('flat')
                 with time.add_slot('append'):
                     ui.icon('access_time').on('click', menu.open).classes('cursor-pointer')
         return time_input
