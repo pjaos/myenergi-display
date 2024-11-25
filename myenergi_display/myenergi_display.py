@@ -106,6 +106,10 @@ class MyEnergi(object):
            @param throw_error True if this method should throw an error if the stats is not found.
            @return The stat or None if not found."""
         stat = None
+        # If the stats have not been read yet, read them
+        if not self._eddi_stats_dict or name not in self._eddi_stats_dict:
+            self.update_stats()
+
         if self._eddi_stats_dict:
             if name in self._eddi_stats_dict:
                 stat = self._eddi_stats_dict[name]
@@ -121,6 +125,10 @@ class MyEnergi(object):
            @param throw_error True if this method should throw an error if the stats is not found.
            @return The stat or None if not found."""
         stat = None
+        # If the stats have not been read yet, read them
+        if not self._zappi_stats_dict or name not in self._zappi_stats_dict:
+            self.update_stats()
+
         if self._zappi_stats_dict:
             if name in self._zappi_stats_dict:
                 stat = self._zappi_stats_dict[name]
@@ -864,13 +872,13 @@ class GUIServer(object):
 
     def _top_boost(self):
         self._eddi_heater_button_selected = 1
-        self._enable_buttons(False)
+        self._enable_buttons(True)
         ui.notify("Setting top boost on.", position='center', type='ongoing', timeout=15000)
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP)).start()
 
     def _bottom_boost(self):
         self._eddi_heater_button_selected = 2
-        self._enable_buttons(False)
+        self._enable_buttons(True)
         ui.notify("Setting bottom boost on.", position='center', type='ongoing', timeout=15000)
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM)).start()
 
