@@ -158,6 +158,93 @@ class MyEnergi(object):
         url = MyEnergi.BASE_URL + "cgi-jstatus-E"
         return self._exec_api_cmd(url)
 
+    def get_zappi_schedule_list(self):
+        """@brief Get the zappi charge schedule list.
+           @return A list with four elements. Each element is a list
+                   that contains the following three elements
+                   0 = The time as HH:MM
+                   1 = The duration as HH:MM
+                   2 = A comma separated list of days of the week. Each day as three letters."""
+        table_row_list = []
+        zappi_stats_dict = self.get_zappi_stats()
+        if GUIServer.BOOST_TIMES_KEY in zappi_stats_dict:
+            for boost_dict in zappi_stats_dict[GUIServer.BOOST_TIMES_KEY]:
+                if self._is_valid_boost_dict(boost_dict):
+                    """A boost dict contains the following
+                        0: bdd The days of the week in the form 01111111.
+                            The first 1 indicates that the schedule applies to Mon
+                            The next is Tue and so on until Sun.
+                            Therefore 01111111 indicate the schedule applies to
+                            every day of the week.
+                        1: bdh Duration in hours.
+                        2: bdm Duration in minutes.
+                        3: bsh Time in hours.
+                        4: bsm Time in minutes.
+                        5: slt The slot. An integer to indicate the schedule slot (11,12,13 or 14)."""
+                    bdd = boost_dict[GUIServer.BDD_BOOST_DICT_KEY]
+                    bdh = boost_dict[GUIServer.BDH_BOOST_DICT_KEY]
+                    bdm = boost_dict[GUIServer.BDM_BOOST_DICT_KEY]
+                    bsh = boost_dict[GUIServer.BSH_BOOST_DICT_KEY]
+                    bsm = boost_dict[GUIServer.BSM_BOOST_DICT_KEY]
+                    table_row = self._get_sched_table_row(bdd,
+                                                            bdh,
+                                                            bdm,
+                                                            bsh,
+                                                            bsm)
+                    table_row_list.append(table_row)
+        return table_row_list
+
+    def _is_valid_boost_dict(self, boost_dict):
+        """@brief Determine if the boost dict is valid.
+           @return True if all the required keys are present in the boost dict."""
+        key_count = 0
+        for key in GUIServer.BOOST_DICT_KEYS:
+            if key in boost_dict:
+                key_count = key_count + 1
+        valid = False
+        if key_count == 6:
+            valid = True
+        return valid
+
+    def _get_sched_table_row(self,
+                             bdd,
+                             bdh,
+                             bdm,
+                             bsh,
+                             bsm):
+        """@return A list/row of values from the myenergi zappi charge schedules.
+                   0 = start time (HH:MM)
+                   1 = duration (HH:MM)
+                   2 = Comma separated list of days of the week. Each day in three letter format."""
+        day_list = self._get_sched_day_list(bdd)
+        duration = f"{bdh:02d}:{bdm:02d}"
+        start_time = f"{bsh:02d}:{bsm:02d}"
+        table_row = None
+        table_row = (start_time, duration, day_list)
+        return table_row
+
+    def _get_sched_day_list(self, bdd):
+        """@brief Get a list of days that a schedule applies to.
+           @param bdd The bdd field from the zappi schedule.
+           @return A comma separated list of three letter day names."""
+        day_list = []
+        if len(bdd) == 8:
+            if bdd[1] == '1':
+                day_list.append('Mon')
+            elif bdd[2] == '1':
+                day_list.append('Tue')
+            elif bdd[3] == '1':
+                day_list.append('Wed')
+            elif bdd[4] == '1':
+                day_list.append('Thu')
+            elif bdd[5] == '1':
+                day_list.append('Fri')
+            elif bdd[6] == '1':
+                day_list.append('Sat')
+            elif bdd[7] == '1':
+                day_list.append('Sun')
+        return ",".join(day_list)
+
     def get_zappi_stats(self):
         """@brief Get the stats of the eddi unit."""
         self._check_eddi_serial_number()
@@ -820,7 +907,8 @@ class GUIServer(object):
             self._update_gui(msg_dict)
 
     def _update_stats(self):
-        """@brief Update the stats read from the network."""
+        """@brief Update the stats read from the network.
+                  This should not be called in the GUI thread as it will block if there are network issues."""
         try:
             self._my_energi.update_stats()
             top_temp = self._my_energi.get_eddi_top_tank_temp()
@@ -1182,53 +1270,6 @@ class GUIServer(object):
         ui.notify("Reading the zappi charge shedules.")
         threading.Thread(target=self._get_zappi_charge_thread).start()
 
-    def _is_valid_boost_dict(self, boost_dict):
-        """@brief Determine if the boost dict is valid.
-           @return True if all the reuired keys are present in the boost dict."""
-        key_count = 0
-        for key in GUIServer.BOOST_DICT_KEYS:
-            if key in boost_dict:
-                key_count = key_count + 1
-        valid = False
-        if key_count == 6:
-            valid = True
-        return valid
-
-    def _get_sched_day_list(self, bdd):
-        """@brief Get a list of days that a schedule applies to.
-           @return A comma separated list of three letter day names."""
-        day_list = []
-        if len(bdd) == 8:
-            if bdd[1] == '1':
-                day_list.append('Mon')
-            elif bdd[2] == '1':
-                day_list.append('Tue')
-            elif bdd[3] == '1':
-                day_list.append('Wed')
-            elif bdd[4] == '1':
-                day_list.append('Thu')
-            elif bdd[5] == '1':
-                day_list.append('Fri')
-            elif bdd[6] == '1':
-                day_list.append('Sat')
-            elif bdd[7] == '1':
-                day_list.append('Sun')
-        return ",".join(day_list)
-
-    def _get_sched_table_row(self,
-                             bdd,
-                             bdh,
-                             bdm,
-                             bsh,
-                             bsm):
-        """@return A row of values from the myenergi zappi charge schedules."""
-        day_list = self._get_sched_day_list(bdd)
-        duration = f"{bdh:02d}:{bdm:02d}"
-        start_time = f"{bsh:02d}:{bsm:02d}"
-        table_row = None
-        table_row = (start_time, duration, day_list)
-        return table_row
-
     def _send_zappi_sched_to_gui(self, table_row_list):
         """@brief After having read the zappi schedule list from the myenergy system
                   send it to the GUI.
@@ -1238,25 +1279,9 @@ class GUIServer(object):
         self._update_gui(msg_dict)
 
     def _get_zappi_charge_thread(self):
-        """@brief read the zappi charge data"""
-        table_row_list = []
+        """@brief Read the zappi charge """
         try:
-            zappi_stats_dict = self._my_energi.get_zappi_stats()
-            if GUIServer.BOOST_TIMES_KEY in zappi_stats_dict:
-                for boost_dict in zappi_stats_dict[GUIServer.BOOST_TIMES_KEY]:
-                    if self._is_valid_boost_dict(boost_dict):
-                        bdd = boost_dict[GUIServer.BDD_BOOST_DICT_KEY]
-                        bdh = boost_dict[GUIServer.BDH_BOOST_DICT_KEY]
-                        bdm = boost_dict[GUIServer.BDM_BOOST_DICT_KEY]
-                        bsh = boost_dict[GUIServer.BSH_BOOST_DICT_KEY]
-                        bsm = boost_dict[GUIServer.BSM_BOOST_DICT_KEY]
-                        table_row = self._get_sched_table_row(bdd,
-                                                              bdh,
-                                                              bdm,
-                                                              bsh,
-                                                              bsm)
-                        # PJAif table_row:
-                        table_row_list.append(table_row)
+            table_row_list = self._my_energi.get_zappi_schedule_list()
 
             msg_dict = {}
             msg_dict[GUIServer.INFO_MESSAGE] = "Read the zappi charge shedules."
