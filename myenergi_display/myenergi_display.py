@@ -628,7 +628,7 @@ class GUIServer(object):
 
         region_code = self._electricity_region_code.value
         if region_code is None or region_code not in RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS:
-            ui.notify("ERROR: Electricity region code not set.", type='negative')
+            ui.notify("Electricity region code not set.", type='negative')
 
         else:
             if self._check_eddi_access_ok(show_info=show_info):
@@ -645,7 +645,7 @@ class GUIServer(object):
                     try:
                         float(self._zappi_max_charge_rate.value)
                     except ValueError:
-                        ui.notify(f"ERROR: {self._zappi_max_charge_rate.value} is an invalid zappi charge rate (kW).", type='negative')
+                        ui.notify(f"{self._zappi_max_charge_rate.value} is an invalid zappi charge rate (kW).", type='negative')
                         # Don't proceed with saving
                         return
                 self._cfg_mgr.addAttr(GUIServer.ZAPPI_MAX_CHARGE_RATE, self._zappi_max_charge_rate.value)
@@ -790,7 +790,7 @@ class GUIServer(object):
 
         elif GUIServer.ERROR_MESSAGE in rxDict:
             error_message = rxDict[GUIServer.ERROR_MESSAGE]
-            ui.notify(f"ERROR: {error_message}", type='negative')
+            ui.notify(f"{error_message}", type='negative')
 
         elif GUIServer.INFO_MESSAGE in rxDict:
             info_message = rxDict[GUIServer.INFO_MESSAGE]
@@ -959,7 +959,6 @@ class GUIServer(object):
 
         with ui.row():
             self._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
-# PJA           self._plot_tariff_button = ui.button('Plot', on_click=self._plot_tariff)
             self._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
 
         with ui.row():
@@ -991,11 +990,9 @@ class GUIServer(object):
         """@brief Called when the octopus agile tariff is enabled."""
         if enabled:
             self._add_tariff_value_button.disable()
-# PJA           self._plot_tariff_button.disable()
             self._clear_tariff_value_button.disable()
         else:
             self._add_tariff_value_button.enable()
-# PJA           self._plot_tariff_button.enable()
             self._clear_tariff_value_button.enable()
 
     def _tariff_changed(self):
@@ -1004,14 +1001,12 @@ class GUIServer(object):
         self._enable_octopus_agile_tariff(octopus_agile_tariff)
         if octopus_agile_tariff:
             self._add_tariff_value_button.disable()
-# PJA           self._plot_tariff_button.disable()
             self._clear_tariff_value_button.disable()
             if self._other_tariff_plot_container:
                 self._other_tariff_plot_container.clear()
 
         else:
             self._add_tariff_value_button.enable()
-# PJA           self._plot_tariff_button.enable()
             self._clear_tariff_value_button.enable()
             self._plot_tariff()
 
@@ -1165,7 +1160,7 @@ class GUIServer(object):
 
         except Exception as ex:
             self._printException()
-            ui.notify(f"ERROR: {str(ex)}", type='negative')
+            ui.notify(f"{str(ex)}", type='negative')
 
     def _clear_tariff(self):
         """@brief Clear the other tariff values."""
@@ -1187,7 +1182,7 @@ class GUIServer(object):
             ok = True
         except Exception as ex:
             self._printException()
-            ui.notify(f"EDDI ERROR: {str(ex)}", type='negative')
+            ui.notify(f"eddi: {str(ex)}", type='negative')
         return ok
 
     def _check_zappi_access_ok(self, show_info=True):
@@ -1204,7 +1199,7 @@ class GUIServer(object):
             ok = True
         except Exception as ex:
             self._printException()
-            ui.notify(f"ZAPPI ERROR: {str(ex)}", type='negative')
+            ui.notify(f"zappi: {str(ex)}", type='negative')
         return ok
 
     def _show_regional_codes(self):
@@ -1652,8 +1647,8 @@ class GUIServer(object):
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
                 battery_charged_kwh = current_battery_kwh+kwh
                 battery_charged_percentage = (battery_charged_kwh/battery_capacity_kwh)*100.0
-# PJA               ui.label(f"{kwh:.1f} kWh over {total_charge_mins:.0f} mins (£{cost:.2f})")
-                ui.label(f"Add {kwh:.1f} kWh to give {battery_charged_percentage:.0f} % (£{cost:.2f})")
+                ui.label(f"Charge for {int(total_charge_mins)} minutes to give {battery_charged_percentage:.0f} % charge.")
+                ui.label(f"This use {kwh:.1f} kWh of energy (cost = £{cost:.2f}).")
 
             self._charge_slot_dict_list = charge_slot_dict_list
 
@@ -1713,6 +1708,9 @@ class GUIServer(object):
                 merged_charge_slot_dict_list.append(current_slot_start_dict)
 
         try:
+            if len(merged_charge_slot_dict_list) == 0:
+                raise Exception("The calculated charge schedule has no duration.")
+
             self._my_energi.set_zappi_charge_schedule(merged_charge_slot_dict_list)
             msg_dict = {}
             msg_dict[GUIServer.INFO_MESSAGE] = GUIServer.SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE
