@@ -51,6 +51,7 @@ class MyEnergi(object):
         self._eddi_stats_dict = None
         self._zappi_stats_dict = None
         self._uio = uio
+        self._lock = threading.Lock()
 
     def set_eddi_serial_number(self, eddi_serial_number):
         """@brief set the eddi serial number.
@@ -358,27 +359,31 @@ class MyEnergi(object):
     def _exec_api_cmd(self, url):
         """@brief Run a command using the myenergi api and check for errors.
            @return The json response message."""
-        self._debug(f"_exec_api_cmd: url={url}")
-        response = requests.get(url, auth=HTTPDigestAuth(self._eddi_serial_number, self._api_key))
-        if response.status_code != 200:
-            raise Exception(f"{response.status_code} error code returned from myenergi server.")
-        self._debug(f"_exec_api_cmd: response.status_code={response.status_code}")
-        response_dict = response.json()
+        # As this maybe called from multiple threads ensure we use acquire a thread lock each time
+        # we communicate with the myenergi server.
+        with self._lock:
+            self._debug(f"_exec_api_cmd: url={url}")
+            response = requests.get(url, auth=HTTPDigestAuth(self._eddi_serial_number, self._api_key))
+            if response.status_code != 200:
+                raise Exception(f"{response.status_code} error code returned from myenergi server.")
+            self._debug(f"_exec_api_cmd: response.status_code={response.status_code}")
+            response_dict = response.json()
 
-        try:
-            if isinstance(response_dict, list):
-                pstr = json.dumps(response_dict[0], sort_keys=True, indent=4)
-                self._debug(f"_exec_api_cmd: response_dict={pstr}")
-            else:
-                pstr = str(response_dict)
-                self._debug(f"_exec_api_cmd: response_dict={pstr}")
+            try:
+                if isinstance(response_dict, list):
+                    pstr = json.dumps(response_dict[0], sort_keys=True, indent=4)
+                    self._debug(f"_exec_api_cmd: response_dict={pstr}")
+                else:
+                    pstr = str(response_dict)
+                    self._debug(f"_exec_api_cmd: response_dict={pstr}")
 
-        except Exception as ex:
-            GUIServer.Print_Exception()
-            self._debug(f"_exec_api_cmd: error displaying response: {str(ex)}")
+            except Exception as ex:
+                GUIServer.Print_Exception()
+                self._debug(f"_exec_api_cmd: error displaying response: {str(ex)}")
 
-        if 'status' in response_dict and response_dict['status'] != 0:
-            raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
+            if 'status' in response_dict and response_dict['status'] != 0:
+                raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
+
         return response_dict
 
     def set_zappi_mode_fast_charge(self):
@@ -1690,16 +1695,6 @@ class GUIServer(object):
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
            @return A dict containing the slots that the car should charge in."""
         try:
-            # The zappi hargr must be set to eco+ mode to run the charge schedule.
-            # Check for thi and set if required.
-            zapp_charge_mode = self._my_energi.get_zappi_charge_mode()
-            if zapp_charge_mode != MyEnergi.ZAPPI_CHARGE_MODE_ECO_PLUS:
-                self._my_energi.set_zappi_mode_eco_plus()
-                # Display a messge to let the user know that the mode had to be set to eco+
-                msg_dict = {}
-                msg_dict[GUIServer.INFO_MESSAGE] = "Set the zappi to eco+ charge mode."
-                self._update_gui(msg_dict)
-
             charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
                                                                                                                                                  end_charge_time,
                                                                                                                                                  charge_rate_kw,
@@ -1797,6 +1792,16 @@ class GUIServer(object):
 
     def _set_zappi_charge_thread(self):
         # Sort the dicts in the list on the slot start time. The slot closest in time will be first in the list.
+        # The zappi hargr must be set to eco+ mode to run the charge schedule.
+        # Check for this and set if required.
+        zapp_charge_mode = self._my_energi.get_zappi_charge_mode()
+        if zapp_charge_mode != MyEnergi.ZAPPI_CHARGE_MODE_ECO_PLUS:
+            self._my_energi.set_zappi_mode_eco_plus()
+            # Display a messge to let the user know that the mode had to be set to eco+
+            msg_dict = {}
+            msg_dict[GUIServer.INFO_MESSAGE] = "Set the zappi to eco+ charge mode."
+            self._update_gui(msg_dict)
+
         sorted_charge_slot_dict_list = sorted(deepcopy(self._charge_slot_dict_list), key=lambda x: x[RegionalElectricity.SLOT_START_DATETIME])
 
         # merge any consecutive slots together to reduce the number of zappi charge schedules which is limited to 4 on the my energi system.
