@@ -364,7 +364,17 @@ class MyEnergi(object):
             raise Exception(f"{response.status_code} error code returned from myenergi server.")
         self._debug(f"_exec_api_cmd: response.status_code={response.status_code}")
         response_dict = response.json()
-        self._debug(f"_exec_api_cmd: response_dict={response_dict}")
+
+        try:
+            if isinstance(response_dict, list):
+                pstr = json.dumps(response_dict[0], sort_keys=True, indent=4)
+                self._debug(f"_exec_api_cmd: response_dict={pstr}")
+            else:
+                pstr = str(response_dict)
+                self._debug(f"_exec_api_cmd: response_dict={pstr}")
+        except:
+            self._debug("_exec_api_cmd: error displaying response.")
+
         if 'status' in response_dict and response_dict['status'] != 0:
             raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
         return response_dict
@@ -414,23 +424,38 @@ class MyEnergi(object):
             url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-"+charge_str
             self._exec_api_cmd(url)
 
-
 class ColorButton(ui.button):
+    """@brief A button that can change it's background color to one of a number of states."""
+    DEFAULT_COLORS = ["blue",'purple','green']
 
     def __init__(self, callBack=None, *args, **kwargs) -> None:
+        """@brief Constructor.
+                  This sets 3 default colors that the button can be in."""
         super().__init__(*args, **kwargs)
-        self._state = False
+        self._color_index = 0
+        self.set_button_colors(ColorButton.DEFAULT_COLORS)
         self.on('click', callBack)
 
-    def set_on(self, on):
-        """@brief Set state on/off
-           @param on If True set button color to green, else grey."""
-        self._state = on
+    def set_button_colors(self, color_list):
+        """@brief Set a list of background colors for the button.
+           @param color_list A list of colors (strings) for each state the button can be in."""
+        if len(color_list) < 1:
+            raise Exception("The list of button colors must include at least one color.")
+        self._color_list = color_list
+
+    def set_color_index(self, color_index):
+        """@brief Set the first of the three button states (low).
+           @param color_index The index of the current color"""
+        max_index = len(self._color_list)-1
+        if self._color_index > max_index:
+            raise Exception(f"{color_index} is an invalid button color index. The maximum color index is {max_index}.")
+        self._color_index = color_index
         self.update()
 
     def update(self) -> None:
         """@brief Update the button state."""
-        self.props(f'color={"green" if self._state else GUIServer.DEFAULT_BUTTON_COLOR}')
+        button_color = self._color_list[self._color_index]
+        self.props(f'color={button_color}')
         super().update()
 
 
@@ -604,6 +629,10 @@ class GUIServer(object):
                        SLT_BOOST_DICT_KEY
                        ]
     PLOT_OPTIMAL_CHARGE_TIMES = "PLOT_OPTIMAL_CHARGE_TIMES"
+
+    BUTTON_LOW_INDEX = 0
+    BUTTON_MID_INDEX = 1
+    BUTTON_HIGH_INDEX = 2
 
     def __init__(self, uio, port):
         """@brief Constructor
@@ -801,12 +830,12 @@ class GUIServer(object):
 
         heater_on = self._get_heater_on()
         if heater_on == 1:
-            self._boost_top_button.set_on(True)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
         elif heater_on == 2:
-            self._boost_bottom_button.set_on(True)
+            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
         else:
-            self._boost_top_button.set_on(False)
-            self._boost_bottom_button.set_on(False)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         now = datetime.now()
         clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
@@ -844,14 +873,14 @@ class GUIServer(object):
            @param rxDict The dict received from the GUI message queue."""
 
         if GUIServer.BOOST_1_ON in rxDict:
-            self._boost_top_button.set_on(True)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
 
         elif GUIServer.BOOST_2_ON in rxDict:
-            self._boost_bottom_button.set_on(True)
+            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
 
         elif GUIServer.BOOST_OFF in rxDict:
-            self._boost_top_button.set_on(False)
-            self._boost_bottom_button.set_on(False)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         elif GUIServer.ERROR_MESSAGE in rxDict:
             error_message = rxDict[GUIServer.ERROR_MESSAGE]
@@ -934,8 +963,8 @@ class GUIServer(object):
     def _stop_boost(self):
         self._eddi_heater_button_selected = 0
         self._enable_buttons(True)
-        self._boost_top_button.set_on(False)
-        self._boost_bottom_button.set_on(False)
+        self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+        self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
         ui.notify("Turning off boost.", position='center', type='ongoing', timeout=11000)
         threading.Thread(target=self._set_boost, args=(False, None)).start()
 
@@ -1377,8 +1406,10 @@ class GUIServer(object):
     def _set_zappi_charge_active(self, active):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
            @param active If True then a zappi charge schedule has been set."""
-        # Set button color when schedule is applied.
-        self._set_button.set_on(active)
+        if active:
+            self._set_button.set_color_index(GUIServer.BUTTON_MID_INDEX)
+        else:
+            self._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
     def _display_zappi_charge_table(self, zappi_charge_sched_table):
         """@brief Display the table of configured zappi charge schedules.
