@@ -372,8 +372,10 @@ class MyEnergi(object):
             else:
                 pstr = str(response_dict)
                 self._debug(f"_exec_api_cmd: response_dict={pstr}")
-        except:
-            self._debug("_exec_api_cmd: error displaying response.")
+
+        except Exception as ex:
+            GUIServer.Print_Exception()
+            self._debug(f"_exec_api_cmd: error displaying response: {str(ex)}")
 
         if 'status' in response_dict and response_dict['status'] != 0:
             raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
@@ -424,9 +426,10 @@ class MyEnergi(object):
             url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-"+charge_str
             self._exec_api_cmd(url)
 
+
 class ColorButton(ui.button):
     """@brief A button that can change it's background color to one of a number of states."""
-    DEFAULT_COLORS = ["blue",'purple','green']
+    DEFAULT_COLORS = ["blue", 'purple', 'green']
 
     def __init__(self, callBack=None, *args, **kwargs) -> None:
         """@brief Constructor.
@@ -633,6 +636,13 @@ class GUIServer(object):
     BUTTON_LOW_INDEX = 0
     BUTTON_MID_INDEX = 1
     BUTTON_HIGH_INDEX = 2
+
+    @staticmethod
+    def Print_Exception():
+        """@brief Print an exception traceback."""
+        lines = traceback.format_exc().split("\n")
+        for line in lines:
+            print(line)
 
     def __init__(self, uio, port):
         """@brief Constructor
@@ -995,7 +1005,7 @@ class GUIServer(object):
             self._update_gui(retDict)
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
@@ -1026,7 +1036,7 @@ class GUIServer(object):
                 msg_dict[GUIServer.TANK_TEMPERATURES] = [top_temp, bottom_temp]
                 self._update_gui(msg_dict)
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
@@ -1175,7 +1185,7 @@ class GUIServer(object):
                 self._plot_tariff()
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             ui.notify(f"{str(ex)}", type='negative')
 
     def _get_tariff(self):
@@ -1266,7 +1276,7 @@ class GUIServer(object):
                     ui.plotly(fig)
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             ui.notify(f"{str(ex)}", type='negative')
 
     def _clear_tariff(self):
@@ -1288,7 +1298,7 @@ class GUIServer(object):
                 ui.notify("Successfully read eddi stats.", position='center')
             ok = True
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             ui.notify(f"eddi: {str(ex)}", type='negative')
         return ok
 
@@ -1305,7 +1315,7 @@ class GUIServer(object):
                 ui.notify("Successfully read zappi stats.", position='center')
             ok = True
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             ui.notify(f"zappi: {str(ex)}", type='negative')
         return ok
 
@@ -1392,16 +1402,10 @@ class GUIServer(object):
             self._send_zappi_sched_to_gui(table_row_list)
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
-
-    def _printException(self):
-        """@brief Print an exception traceback."""
-        lines = traceback.format_exc().split("\n")
-        for line in lines:
-            print(line)
 
     def _set_zappi_charge_active(self, active):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
@@ -1707,7 +1711,7 @@ class GUIServer(object):
             self._update_gui(msg_dict)
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
@@ -1768,7 +1772,7 @@ class GUIServer(object):
             self._charge_slot_dict_list = charge_slot_dict_list
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
@@ -1840,7 +1844,7 @@ class GUIServer(object):
             self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, clear_schedule_time.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
@@ -1860,7 +1864,7 @@ class GUIServer(object):
             msg_dict[GUIServer.INFO_MESSAGE] = GUIServer.CLEARED_ALL_CHARGING_SCHEDULES
             self._update_gui(msg_dict)
         except Exception as ex:
-            self._printException()
+            GUIServer.Print_Exception()
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
