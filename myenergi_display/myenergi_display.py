@@ -813,8 +813,8 @@ class GUIServer(object):
                    2 If bottom relay is on and power is being drawn by the heater.
                    else return 0."""
         relay_on = 0
-        # We use a 2.6 kW threshold to determine of the heater is on.
-        if self._heater_load > 2600:
+        # We use a 2.5 kW threshold to determine of the heater is on.
+        if self._heater_load > 2500:
             if self._relay_on == 1:
                 relay_on = 1
             elif self._relay_on == 2:
@@ -841,11 +841,13 @@ class GUIServer(object):
         heater_on = self._get_heater_on()
         if heater_on == 1:
             self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+
         elif heater_on == 2:
             self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+
         else:
             self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         now = datetime.now()
         clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
@@ -883,14 +885,13 @@ class GUIServer(object):
            @param rxDict The dict received from the GUI message queue."""
 
         if GUIServer.BOOST_1_ON in rxDict:
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+            ui.notify('Top heater boost on.')
 
         elif GUIServer.BOOST_2_ON in rxDict:
-            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+            ui.notify('Bottom heater boost on.')
 
         elif GUIServer.BOOST_OFF in rxDict:
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+            ui.notify('Top and bottom heaters off.')
 
         elif GUIServer.ERROR_MESSAGE in rxDict:
             error_message = rxDict[GUIServer.ERROR_MESSAGE]
@@ -961,21 +962,19 @@ class GUIServer(object):
     def _top_boost(self):
         self._eddi_heater_button_selected = 1
         self._enable_buttons(True)
-        ui.notify("Setting top boost on.", position='center', type='ongoing', timeout=15000)
+        ui.notify("Setting top boost on.", position='center')
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP)).start()
 
     def _bottom_boost(self):
         self._eddi_heater_button_selected = 2
         self._enable_buttons(True)
-        ui.notify("Setting bottom boost on.", position='center', type='ongoing', timeout=15000)
+        ui.notify("Setting bottom boost on.", position='center')
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM)).start()
 
     def _stop_boost(self):
         self._eddi_heater_button_selected = 0
         self._enable_buttons(True)
-        self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-        self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-        ui.notify("Turning off boost.", position='center', type='ongoing', timeout=11000)
+        ui.notify("Turning off boost.", position='center')
         threading.Thread(target=self._set_boost, args=(False, None)).start()
 
     def _update_gui(self, msg_dict):
