@@ -149,9 +149,9 @@ class MyEnergi(object):
         """@return The eddi bottom tank temperature or None if not known."""
         return self._get_eddi_stat('tp2')
 
-    def get_eddi_heater_kw(self):
+    def get_eddi_heater_watts(self):
         """@return The eddi heater power in kw or None if not known."""
-        return self._get_eddi_stat('div')
+        return self._get_eddi_stat('ectp1')
 
     def get_eddi_heater_number(self):
         """@return The eddi heater number that is on.
@@ -162,6 +162,10 @@ class MyEnergi(object):
     def get_zappi_charge_mode(self):
         """@return The zappi charge mode or None if not known."""
         return self._get_zappi_stat('zmo')
+
+    def get_zappi_charge_watts(self):
+        """@return Get the current charge rate of the zappi in watts."""
+        return self._get_zappi_stat('ectp1')
 
     def get_eddi_stats(self):
         """@brief Get the stats of the eddi unit."""
@@ -369,20 +373,15 @@ class MyEnergi(object):
             self._debug(f"_exec_api_cmd: response.status_code={response.status_code}")
             response_dict = response.json()
 
-            try:
-                if isinstance(response_dict, list):
-                    pstr = json.dumps(response_dict[0], sort_keys=True, indent=4)
-                    self._debug(f"_exec_api_cmd: response_dict={pstr}")
-                else:
-                    pstr = str(response_dict)
-                    self._debug(f"_exec_api_cmd: response_dict={pstr}")
+            if response_dict:
+                index = 0
+                for elem in response_dict:
+                    pstr = json.dumps(elem, sort_keys=True, indent=4)
+                    self._debug(f"_exec_api_cmd: index={index}, elem={pstr}")
+                    index=index+1
 
-            except Exception as ex:
-                GUIServer.Print_Exception()
-                self._debug(f"_exec_api_cmd: error displaying response: {str(ex)}")
-
-            if 'status' in response_dict and response_dict['status'] != 0:
-                raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
+                if 'status' in response_dict and response_dict['status'] != 0:
+                    raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
 
         return response_dict
 
@@ -660,7 +659,8 @@ class GUIServer(object):
         self._my_energi = MyEnergi('')
         self._eddi_update_seconds = GUIServer.TEMP_UPDATE_SECONDS
         self._next_temp_update_time = time()+self._eddi_update_seconds
-        self._heater_load = 0.0
+        self._heater_load_watts = 0
+        self._zappi_charge_watts = 0
         self._relay_on = 0
         self._eddi_heater_button_selected = 0
         self._electricity_region_code = ''
@@ -668,6 +668,7 @@ class GUIServer(object):
         self._octopus_agile_tariff = True
         self._other_tariff_values = []
         self._read_temp_thread = None
+        self._zappi_charge_schedule_active = False
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
 
@@ -819,12 +820,21 @@ class GUIServer(object):
                    else return 0."""
         relay_on = 0
         # We use a 2.5 kW threshold to determine of the heater is on.
-        if self._heater_load > 2500:
+        if self._heater_load_watts > 2500:
             if self._relay_on == 1:
                 relay_on = 1
             elif self._relay_on == 2:
                 relay_on = 2
         return relay_on
+
+    def _get_zappi_charging(self):
+        """@brief Determine if the zappi is charging an EV.
+           @return True if the EV is charging."""
+        ev_charging = False
+        # We use a threshold of 1400 watts as 1500 watts appears to be the min ev charge rate.
+        if self._zappi_charge_watts > 1400:
+            ev_charging = True
+        return ev_charging
 
     def _gui_timer_callback(self):
         """@called periodically (quickly) to allow updates of the GUI."""
@@ -854,6 +864,15 @@ class GUIServer(object):
             self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
             self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
+        ev_charging = self._get_zappi_charging()
+        if ev_charging:
+            self._set_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+        else:
+            if self._zappi_charge_schedule_active:
+                self._set_button.set_color_index(GUIServer.BUTTON_MID_INDEX)
+            else:
+                self._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+
         now = datetime.now()
         clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
         if clear_zappi_schedule_time and clear_zappi_schedule_time <= now:
@@ -881,6 +900,8 @@ class GUIServer(object):
         self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, "")
         # Save the time that the zappi schedule should be deleted
         self._save_config(show_info=False)
+        # Reset this so that the Set button returns to it's original color.
+        self._zappi_charge_schedule_active = False
         # Call the methodf invoked when the user selects the Clear zappi schedules button
         # to remove the schedules from the zappi.
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
@@ -1034,7 +1055,8 @@ class GUIServer(object):
                 self._my_energi.update_stats()
                 top_temp = self._my_energi.get_eddi_top_tank_temp()
                 bottom_temp = self._my_energi.get_eddi_bottom_tank_temp()
-                self._heater_load = self._my_energi.get_eddi_heater_kw()
+                self._heater_load_watts = self._my_energi.get_eddi_heater_watts()
+                self._zappi_charge_watts = self._my_energi.get_zappi_charge_watts()
                 self._relay_on = self._my_energi.get_eddi_heater_number()
                 msg_dict = {}
                 msg_dict[GUIServer.TANK_TEMPERATURES] = [top_temp, bottom_temp]
@@ -1414,10 +1436,7 @@ class GUIServer(object):
     def _set_zappi_charge_active(self, active):
         """@brief Set the indicator to the user that shows that the zappi charge is active/inactive.
            @param active If True then a zappi charge schedule has been set."""
-        if active:
-            self._set_button.set_color_index(GUIServer.BUTTON_MID_INDEX)
-        else:
-            self._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+        self._zappi_charge_schedule_active = active
 
     def _display_zappi_charge_table(self, zappi_charge_sched_table):
         """@brief Display the table of configured zappi charge schedules.
@@ -1858,6 +1877,8 @@ class GUIServer(object):
         ui.notify("Clearing all zappi charge schedules", position='center', type='ongoing', timeout=3000)
         self._plot_container.clear()
         self._charge_slot_dict_list = None
+        # Reset this so that the Set button returns to it's original color.
+        self._zappi_charge_schedule_active = False
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
 
     def _clear_zappi_charge_schedules_thread(self):
