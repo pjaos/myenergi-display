@@ -8,7 +8,7 @@ import traceback
 
 from requests.auth import HTTPDigestAuth
 from queue import Queue
-from time import time
+from time import time, sleep
 
 from datetime import timedelta, datetime, timezone
 import urllib.request
@@ -297,6 +297,8 @@ class MyEnergi(object):
         for sched in MyEnergi.VALID_ZAPPI_SLOT_ID_LIST:
             url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-{sched}-0000-000-00000000"
             self._exec_api_cmd(url)
+            # The myenergi system does not always delete the schedule unless a delay occurs between each command
+            sleep(1)
 
     def _get_zappi_charge_string(self, charge_slot_dict, slot_id):
         """@detail Get a string that is formated as required by the myenergi zappi api.
@@ -669,6 +671,7 @@ class GUIServer(object):
         self._other_tariff_values = []
         self._read_temp_thread = None
         self._zappi_charge_schedule_active = False
+        self._clear_zappi_button = None
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
 
@@ -911,17 +914,20 @@ class GUIServer(object):
            @param rxDict The dict received from the GUI message queue."""
 
         if GUIServer.BOOST_1_ON in rxDict:
-            ui.notify('Top heater boost on.')
+            ui.notify(f'Set top tank heater boost on for {self._bootMinsSlider.value} mins.')
 
         elif GUIServer.BOOST_2_ON in rxDict:
-            ui.notify('Bottom heater boost on.')
+            ui.notify(f'Set bottom tank heater boost on for {self._bootMinsSlider.value} mins.')
 
         elif GUIServer.BOOST_OFF in rxDict:
-            ui.notify('Top and bottom heaters off.')
+            ui.notify('Set top and bottom tank heaters off.')
 
         elif GUIServer.ERROR_MESSAGE in rxDict:
             error_message = rxDict[GUIServer.ERROR_MESSAGE]
+            self._clear_zappi_button.enable()
             ui.notify(f"{error_message}", type='negative')
+            if error_message.startswith("-5 status code returned from myenergi server"):
+                ui.notify("The myenergi system may still processing the previous command. Wait some time before trying again.")
 
         elif GUIServer.INFO_MESSAGE in rxDict:
             info_message = rxDict[GUIServer.INFO_MESSAGE]
@@ -932,6 +938,7 @@ class GUIServer(object):
             # If we have confirmation from myenergi that all charge schedules were removed
             if info_message == GUIServer.CLEARED_ALL_CHARGING_SCHEDULES:
                 self._set_zappi_charge_active(False)
+                self._clear_zappi_button.enable()
 
         elif GUIServer.TANK_TEMPERATURES in rxDict:
             top_tank_temp, bottom_tank_temp = rxDict[GUIServer.TANK_TEMPERATURES]
@@ -1401,8 +1408,8 @@ class GUIServer(object):
             self._get_button = ColorButton(self._get_zappi_charge, 'Get')
             self._get_button.tooltip('Get the current charge schedule on your zappi.')
 
-            reset_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_zappi_charge_schedules)
-            reset_button.tooltip('Clear all charge schedules from your zappi charger.')
+            self._clear_zappi_button = ColorButton(self._clear_zappi_charge_schedules, 'Clear')
+            self._clear_zappi_button.tooltip('Clear all charge schedules from your zappi charger.')
 
     def _get_zappi_charge(self):
         """@brief Get the current zappi charge schedule."""
@@ -1874,11 +1881,12 @@ class GUIServer(object):
 
     def _clear_zappi_charge_schedules(self):
         """@brief Reset/disable all zappi charge schedules. Called from the GUI thread. This starts the thread that actually does the work."""
-        ui.notify("Clearing all zappi charge schedules", position='center', type='ongoing', timeout=3000)
+        ui.notify("Clearing all zappi charge schedules", position='center', type='ongoing', timeout=4500)
         self._plot_container.clear()
         self._charge_slot_dict_list = None
         # Reset this so that the Set button returns to it's original color.
         self._zappi_charge_schedule_active = False
+        self._clear_zappi_button.disable()
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
 
     def _clear_zappi_charge_schedules_thread(self):
