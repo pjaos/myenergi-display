@@ -378,7 +378,7 @@ class MyEnergi(object):
                 for elem in response_dict:
                     pstr = json.dumps(elem, sort_keys=True, indent=4)
                     self._debug(f"_exec_api_cmd: index={index}, elem={pstr}")
-                    index=index+1
+                    index = index+1
 
                 if 'status' in response_dict and response_dict['status'] != 0:
                     raise Exception(f"{response_dict['status']} status code returned from myenergi server (should be 0).")
