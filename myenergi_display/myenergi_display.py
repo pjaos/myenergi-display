@@ -1417,7 +1417,7 @@ class GUIServer(object):
         threading.Thread(target=self._get_zappi_charge_thread).start()
 
     def _send_zappi_sched_to_gui(self, table_row_list):
-        """@brief After having read the zappi schedule list from the myenergy system
+        """@brief After having read the zappi schedule list from the myenergi system
                   send it to the GUI.
            @param table_row_list A list of rows to add to the zappi charge table."""
         msg_dict = {}
