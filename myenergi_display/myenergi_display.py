@@ -616,7 +616,7 @@ class GUIServer(object):
     TEMP_UPDATE_SECONDS = 5.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
     DEFAULT_SERVER_PORT = 8080
     GUI_POLL_SECONDS = 0.1
-    TARIFF_LIST = ["Octopus Agile Tarrif", 'Other Tarrif']
+    TARIFF_LIST = ["Octopus Agile Tariff", 'Other Tariff']
     SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE = "Set zappi charge schedule"
     DEFAULT_BUTTON_COLOR = "blue"
     CLEARED_ALL_CHARGING_SCHEDULES = "Cleared all zappi charging schedules."
@@ -750,7 +750,7 @@ class GUIServer(object):
         """@brief Determine if the user has selectedt the Octopus agile tariff.
            @return True if enabled false if not."""
         octopus_agile_tariff = False
-        if self._tarrif_radio.value == GUIServer.TARIFF_LIST[0]:
+        if self._tariff_radio.value == GUIServer.TARIFF_LIST[0]:
             octopus_agile_tariff = True
         return octopus_agile_tariff
 
@@ -1063,7 +1063,13 @@ class GUIServer(object):
                 top_temp = self._my_energi.get_eddi_top_tank_temp()
                 bottom_temp = self._my_energi.get_eddi_bottom_tank_temp()
                 self._heater_load_watts = self._my_energi.get_eddi_heater_watts()
-                self._zappi_charge_watts = self._my_energi.get_zappi_charge_watts()
+                try:
+                    self._zappi_charge_watts = self._my_energi.get_zappi_charge_watts()
+                except Exception:
+                    # If the zappi serial number has been set raise an errror to show to the user as
+                    # we shopuld be able to communicate with the zappi charger.
+                    if self._zappi_serial_number.value or len(self._zappi_serial_number.value) > 0:
+                        raise
                 self._relay_on = self._my_energi.get_eddi_heater_number()
                 msg_dict = {}
                 msg_dict[GUIServer.TANK_TEMPERATURES] = [top_temp, bottom_temp]
@@ -1099,7 +1105,7 @@ class GUIServer(object):
                                                       label='Electricity region code')
 
         with ui.row():
-            self._tarrif_radio = ui.radio(GUIServer.TARIFF_LIST,
+            self._tariff_radio = ui.radio(GUIServer.TARIFF_LIST,
                                           on_change=self._tariff_changed,
                                           value=GUIServer.TARIFF_LIST[0])
 
@@ -1132,9 +1138,9 @@ class GUIServer(object):
     def _set_octopus_agile_tariff(self, enabled):
         """@brief Set the radio buttons to enable the octopus agile tariff or the other (manually entered) tariff."""
         if enabled:
-            self._tarrif_radio.value = GUIServer.TARIFF_LIST[0]
+            self._tariff_radio.value = GUIServer.TARIFF_LIST[0]
         else:
-            self._tarrif_radio.value = GUIServer.TARIFF_LIST[1]
+            self._tariff_radio.value = GUIServer.TARIFF_LIST[1]
 
     def _enable_octopus_agile_tariff(self, enabled):
         """@brief Called when the octopus agile tariff is enabled."""
@@ -1146,7 +1152,7 @@ class GUIServer(object):
             self._clear_tariff_value_button.enable()
 
     def _tariff_changed(self):
-        """@brief Called when the tarrif radio button is selected."""
+        """@brief Called when the tariff radio button is selected."""
         octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
         self._enable_octopus_agile_tariff(octopus_agile_tariff)
         if octopus_agile_tariff:
@@ -1162,7 +1168,7 @@ class GUIServer(object):
 
     def _add_tariff_value(self):
         """@brief Add a tariff value to the displayed other tariff."""
-        self._add_tariff_dialog = YesNoDialog("Add one tarrif point.",
+        self._add_tariff_dialog = YesNoDialog("Add one tariff point.",
                                               self._tariff_value_entered,
                                               successButtonText="OK",
                                               failureButtonText="Cancel")
