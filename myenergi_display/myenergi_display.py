@@ -1066,9 +1066,10 @@ class GUIServer(object):
                 try:
                     self._zappi_charge_watts = self._my_energi.get_zappi_charge_watts()
                 except Exception:
+                    zappi_serial_number = self._cfg_mgr.getAttr(GUIServer.ZAPPI_SERIAL_NUMBER)
                     # If the zappi serial number has been set raise an errror to show to the user as
                     # we shopuld be able to communicate with the zappi charger.
-                    if self._zappi_serial_number.value or len(self._zappi_serial_number.value) > 0:
+                    if len(zappi_serial_number) > 0:
                         raise
                 self._relay_on = self._my_energi.get_eddi_heater_number()
                 msg_dict = {}
@@ -1918,7 +1919,7 @@ def main():
         parser = argparse.ArgumentParser(description="ngt examples.",
                                          formatter_class=argparse.RawDescriptionHelpFormatter)
         parser.add_argument("-p", "--port",    type=int, help=f"The TCP server port to which the GUI server is bound to (default={GUIServer.DEFAULT_SERVER_PORT}).", default=GUIServer.DEFAULT_SERVER_PORT)
-        parser.add_argument("--reload",        action='store_true', help="Reload/Restart GUI when python file is updated. USeful for in dev env.")
+        parser.add_argument("--reload",        action='store_true', help="Reload/Restart GUI when python file is updated. Useful for in dev env.")
         parser.add_argument("--show",          action='store_true', help="Show the GUI (open browser window) on startup.")
         parser.add_argument("-d", "--debug",   action='store_true', help="Enable debugging of the myenergi_display program.")
         parser.add_argument("--nicegui_debug", action='store_true', help="Enable debugging of the nicegui python module.")
