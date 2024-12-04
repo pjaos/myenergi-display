@@ -24,7 +24,7 @@ Enter
 - Select your UK region code from the dropdown list.
 - Select either the Agile tariff or Other Tariff radio buttons. See the 'Adding Other Tariff details' for more information on adding your tariff details if not on the Octopus Agile tariff.
 
-When you have entered the above select the Save button and you should see the following (only the lower half of the screen is shown so the API key and serial numbers are not shown).
+When you have entered the above, select the Save button and you should see the following (only the lower half of the screen is shown so the API key and serial numbers are not shown).
 
 <img src="images/settings_zappi_configured.png" width="300"/>
 
@@ -32,25 +32,27 @@ If you see any error messages check the myenergi API key, eddi and zappi serial 
 
 
 ### Adding Other Tariff details
-If you have a zappi EV charger and are not on the Octopus Agile tariff (follows regional energy pricess every 30 mins) then you should have selected the Other Tariff radio button. In this case you must enter your tariff details for a 24 hour period.
+If you have a zappi EV charger and are not on the Octopus Agile tariff then you should have selected the Other Tariff radio button. In this case you must enter your tariff details for a 24 hour period.
 
 - Fixed price tariff
-If you are on a fixed price tariff (same cost per kWh throughout the day and night) select the add button and enter the time as 0:0 and your electricity price in £ per kWh. In the example below the price entered was 0.25. Select the OK button and your tariff should be plotted as shown below (only the lower half of the screen is shown so the API key and serial numbers are not shown).
+If you are on a fixed price tariff (same cost per kWh throughout the day and night) select the add button and enter the time as 0:0 and your electricity price in £ per kWh. In the example below the price entered was 0.25. Select the OK button and your tariff should be plotted as shown below.
 
 <img src="images/settings_fixed_price_tariff.png" width="300"/>
 
 - Variable tariff
-If you are on a tariff that changes through the day/night you should enter the tariff are 0:0 (12 AM) first as shown below. In this case the tariff value was £0.07 per kWh.
+If you are on a tariff that changes through the day/night you should enter the tariff at 0:0 (12 AM) first as shown below. In this case the tariff value was £0.07 per kWh.
 
 <img src="images/settings_other_tariff_1.png" width="300"/>
 
-You should then the next time the tariff changes through the day. In this case the tariff changed to value was £0.2672 per kWh at 5:30 in the morning.
+You should then enter the next time the tariff changes through the day. In this case the tariff changed to value was £0.2672 per kWh at 5:30 in the morning.
 
 <img src="images/settings_other_tariff_2.png" width="300"/>
 
 Repeat this process until the graph shows all the changes in your tariff value throughout the day. In this case the tariff changed back to £0.07 per kWh at 23:30.
 
 <img src="images/settings_other_tariff_3.png" width="300"/>
+
+The example above shows the values for the Intelligent Octopus Go tariff.
 
 ### Note
 

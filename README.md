@@ -19,20 +19,24 @@ I didn't want to develop an app for a phone due to the effort and maintenance is
 other apps I've developed. Therefore I chose to develop a program in python that serves an app to a mobile
 phone browser which looks similar to an app running on the phone.
 
-I chose to host the python app on a Raspberry Pi zero 2 W as this has a power consumption of only about 0.7 watts.
+I chose to host the python app on a Raspberry Pi zero 2 W as this has a power consumption of only about 0.7 watts. However it should be possible to host the server app on any platform that supports python3.12.
 
 The result is shown below. The main features of this are
 
 - Show the hot water tank temperatures.
 - Allow the immersion heaters (top and bottom) to be set to boost mode.
-- Allow an EV to be charged from the cheapest electricity in the next 24 hours with a simple interface.
+- Allow an EV to be charged from the cheapest electricity via a simple interface.
+
+The following is an image of a mobile phone showing the display.
 
 <img src="doc/images/myenergi_display_phone.png" width="300"/>
+
+A couple of examples of the app in use.
 
 <img src="doc/images/eddi_tab.png" width="300"/> <img src="doc/images/set_zappi_schedule.png" alt="drawing" width="300"/>
 
 # Installation
-Details of how to install and run this software on a Raspberry PI Zero 2 W can be found [here](doc/rpi_zero_installation.md). The Raspberry Pi zero 2 W runs Raspberry Pi's version of Linux (Raspbian bookworm) but the python code should run on any platform (Ubuntu, Windows etc) that supports python3.12. If you are unsure how to run this software on other platforms let me know and I'll do my best to help.
+Details of how to install and run this software on a Raspberry PI Zero 2 W can be found [here](doc/rpi_zero_installation.md). As the software is written in python it should be possible to run it on any platform that supports python version 3.12 (E.G Ubuntu or Windows).
 
 # Starting the server
 Once the installation is complete you need to start the start the myenergy display server. Click [here](doc/starting_the_server.md) for details on how to start the myenergy display server.
@@ -45,10 +49,6 @@ Details on how to use the display to view the hot water tank temperatures and co
 
 # Electric Vehicle charging display
 Details on how to use the display to charge an EV can be found [here](doc/ev_charging.md).
-Turn of intelligent octopus go charging
 
 # 3D printed stand
 I created a stand to hold a mobile phone and details of this can be found [here](mobile_phone_stand/README.md)
-
-
-# Command line help

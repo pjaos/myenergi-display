@@ -1,9 +1,10 @@
 # Running the myenergi-display server.
+The Raspberry Pi zero 2 W (RPi) runs Raspberry Pi's version of Linux (Raspberry Pi OS bookworm) but the python code should run on any platform (Ubuntu, Windows etc) that supports python3.12.
 
-You must have the RPi imager software installed on your PC as detailed [here](https://www.raspberrypi.com/software/)
+Before starting the installation you must have the RPi imager software installed on your desktop PC as detailed [here](https://www.raspberrypi.com/software/)
 
 ## RPi Hardware
-I used a [Raspberry Pi zero 2 W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) although the software should work on any any aarch64 raspberry pi running the latest (12/bookworm) raspbian image.
+I used a [Raspberry Pi zero 2 W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/) although the software should work on any any aarch64 raspberry pi running the latest (version 12/bookworm) Raspberry Pi OS image.
 
 ## Software installation
 
@@ -11,12 +12,13 @@ I used a [Raspberry Pi zero 2 W](https://www.raspberrypi.com/products/raspberry-
 
     - Setup your wifi network and password.
     - Enable ssh and add your public ssh key to it to allow you to log into the RPi without a password.
-      You must have previously setup a local ssh key pair (public/private) on the machine you are using to connect from. More
-      details on how to create ssh key pairs (public/private) can be found at https://www.ssh.com/academy/ssh/keygen.
+      You should have previously setup a local ssh key pair (public/private) on the machine you are using to connect from. More
+      details on how to create ssh key pairs (public/private) can be found [here](https://www.ssh.com/academy/ssh/keygen).
 
-- Install the SD card into the RPi. You will need to know the IP address of the RPi zero 2 W on your local network. Your routers DHCP table should show you it's IP address assigned from your local DHCP server on your WiFi network.
+- Install the SD card into the RPi and power it up. As you entered your WiFi details in the previous step it should connect to your WiFi network. You will need to find out it's IP address on your WiFi network. Your routers DHCP server should have assigned an IP address to the RPi device. The web user interface on your router should show the IP address that the router assigned to the RPi device when it booted.
 
 - Connect to the RPi via ssh.
+    - If the IP address if the RPi device was 192.168.0.20 and the user you created when using the RPI Imager software was auser then you should be able to connect to the Raspberry Pi using a command such as 'ssh auser@192.168.0.20'.
 - Check the operating system of the RPi Zero 2 W as shown below.
 
 ```
@@ -29,7 +31,7 @@ Codename:	bookworm
 ```
 
 - Install pipx
-This allows python applications to be executed in isolated environments.
+pipx allows python applications to be executed in isolated environments. Run the commands below to install the pipx software.
 
 ```
 sudo apt update
@@ -39,7 +41,9 @@ sudo pipx ensurepath
 ```
 
 - Drop ssh connection to RPi and reconnect. This ensures that the pipx executable is in the path when you reconnect.
-- Copy the myenergi_display-0.165-py3-none-any.whl (version may change) file to /tmp on the RPi.
+- Copy the installers/myenergi_display-0.173-py3-none-any.whl (version may change) file to /tmp on the RPi. There are several ways to do this.
+    - Use scp to copy the file as detailed [here](https://www.cyberciti.biz/faq/how-to-copy-and-transfer-files-remotely-on-linux-using-scp-and-rsync/).
+    - Remove the SD card from the RPi. Plug it into your PC and copy it directly.
 - Install the myenergi-display software as shown below
 
 ```
@@ -48,12 +52,12 @@ auser@rpi-2-w:~ $ sudo pipx install /tmp/myenergi_display-0.161-py3-none-any.whl
   These apps are now globally available
     - myenergi_display
 done! ✨ 🌟 ✨
-
 ```
 
-The above command should take about 5 minutes to install the 'myenergi_display' application onto the RPi. The
-software is installed as root user so that it can be auto started when the Raspberry Pi zero 2 W starts/boots up.
+The above command (myenergi_display) should take about 5 minutes to install onto the RPi. The
+software is installed as root user so that it can be auto started when the RPi starts/boots up.
 
 The software is now installed onto the raspberry Pi.
 
-Details of how the myenergi display is used can be found [here](../doc/usage_details.md)
+
+

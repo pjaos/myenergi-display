@@ -13,11 +13,11 @@ The three fields at the top of the page are
 
 - Current EV charge (%)
 
-    You must enter the current state of charge of your EV battery in order that sufficient energy to reach teh above target EV charge can be delivered.
+    You must enter the current state of charge of your EV battery in order that sufficient energy to reach the target EV charge can be delivered.
 
 - Ready by
 
-    This is the time in HH:MM that you wish the car to be charged to the required level.
+    This is the time in HH:MM that you wish the car to be charged to the required level so that you can use it.
 
 The buttons have the following functions.
 
@@ -40,21 +40,22 @@ The buttons have the following functions.
 
 The example below shows how to setup an EV charge.
 
-- Enter the required target EV charge level
-- Enter the current EV charge level
-- Select the CALC button
+- Enter the required target EV charge level.
+- Enter the current EV charge level.
+- Enter the ready by time (optional).
+- Select the CALC button.
 
 The following is then displayed
 
 <img src="images/zappi_calc_charge_1.png" width="500"/>
 
-This shows the calculated time required to achieve the charge level. In this case the target charge level was 80% and the calculated charge would charge the battery to 79%. The difference is because the zappi charges in 15 minute chunks. Therefore the exact target charge level may not be achieved. In such a situation you can adjust the target charge level entered slightly. This allows you to add an extra 15 minutes of charge. In the above example if the target charge level is changed to 82% the charge time changes to 195 minutes, as shown below.
+This shows the time required to achieve the target EV charge level. In this case the target charge level was 80% and the calculated charge would charge the battery to 79%. The difference is because the zappi charges in 15 minute chunks. Therefore the exact target charge level may not be achieved. In such a situation you can make small changes to the target charge level if required. This allows you to add an extra 15 minutes of charge. In the above example if the target charge level is changed to 82% the charge time changes to 195 minutes, as shown below.
 
 <img src="images/zappi_calc_charge_2.png" width="500"/>
 
 The graph shows the tariff in green and the charge period in red. You may zoom into the graph by dragging over the required area. The X in the toolar at the top of the graph can be used to autoscale the graph back to its original size.
 
-Once you are happy with the selected charge times you can press the SET button. If the schedule is successfully uploaded to the myenergi system the SET button background will turn purple to indicate that a schedule has been set. The SET button will turn green while the EV is being charged.
+Once you are happy with the selected charge times you can press the SET button to apply the schedule to your zappi charger. If the schedule is successfully uploaded to the myenergi system the SET button background will turn purple to indicate that a schedule has been set. The SET button will turn green while the EV is being charged.
 
 If you wish to check the schedule that has been uploaded to the myenergi system you may select the GET button. It takes some time (5 minutes or more sometimes) for the myenergi system to update the charge schedule. If the GET button is selected before the myenergu zappi charge schedule has been updated the following will be displayed.
 
