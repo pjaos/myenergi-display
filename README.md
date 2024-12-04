@@ -39,7 +39,7 @@ A couple of examples of the app in use.
 Details of how to install and run this software on a Raspberry PI Zero 2 W can be found [here](doc/rpi_zero_installation.md). As the software is written in python it should be possible to run it on any platform that supports python version 3.12 (E.G Ubuntu or Windows).
 
 # Starting the server
-Once the installation is complete you need to start the start the myenergy display server. Click [here](doc/starting_the_server.md) for details on how to start the myenergy display server.
+Once the installation is complete you need to start the myenergy display server. Click [here](doc/starting_the_server.md) for details on how to start the myenergy display server.
 
 # Configuration
 Once you have started the myenergi display server it must be configured. Click [here](doc/configuring_the_server.md) for details on how to configure the myenergy display server.
