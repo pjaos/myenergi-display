@@ -7,7 +7,7 @@ I have a [myenergi eddi](https://www.myenergi.com/eddi-power-diverter/) installe
 The myenergi eddi unit has a very capable app that sits on your phone for controlling myenergi products but it's
 complexity does not make it a direct replacement for the IBoost buddy.
 
-As I've worked as hardware and software engineer I started thinking about creating a unit that provided some of
+I started thinking about creating a unit that provided some of
 the capabilities of the IBoost buddy. As by this time I also had a Zappi EV car charger fitted, I also started
 thinking how such a display unit could be used to ease the process of charging our EV.
 
