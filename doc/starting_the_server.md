@@ -17,7 +17,7 @@ INFO:  Loaded config from /root/.config/myenergi_display.cfg
 NiceGUI ready to go on http://localhost:8080, and http://192.168.0.95:8080
 ```
 
-The server is now running and waiting for web browsers to connect to it (you may see more than two links in the above message if your computer has more than one network interface). You can connect to the server from your mobile phone by entering the above URL that includes the IP address of the computer that the myenergi_dislay server is running on. In the above case this would be
+The server is now running and waiting for web browsers to connect to it. You may see more than two links in the above message if your computer has more than one network interface. You can connect to the server from your mobile phone by entering the above URL that includes the IP address of the computer that the myenergi_dislay server is running on. In the above case this would be
 
 ```
 http://192.168.0.95:8080
