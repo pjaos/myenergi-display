@@ -31,7 +31,7 @@ As the configuration has not yet been entered the temperatures of the top and bo
 
 
 # Auto starting the myenergi display server
-The myenergy display app can be auto started during startup by entering the following command on Linux computers (E.G Raspberry Pi zero 2).
+The myenergy display app can be auto started during boot by entering the following command on Linux computers (E.G Raspberry Pi zero 2).
 
 ```
 root@machinename:/root/# myenergi_display --enable_auto_start

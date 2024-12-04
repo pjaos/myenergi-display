@@ -7,7 +7,7 @@ With sensors connected to monitor the top and bottom of the tank the eddi tab on
 
 The display shows the temperatures reported by the two PT1000 temperature sensors connected to the eddi unit.
 
-The display also allows the user to set the eddi unit to boost the top or bottom emersion tank heaters (assuming both are connected to the eddi unit). If you only have one emersion heater is connected then only one of the buttons will turn on the tank heater.
+The display also allows the user to set the eddi unit to boost the top or bottom emersion tank heaters, assuming both are connected to the eddi unit. If you only have one emersion heater connected to the eddi then only one of the buttons will turn on the tank heater.
 
 When a button is selected the command is sent to the myenergi system to turn on the tank heater. It may take a min or two for the myenergi system to turn on the tank heater. When the tank heater is on the selected button will turn green.
 
