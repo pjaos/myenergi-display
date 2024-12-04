@@ -7,6 +7,6 @@ I designed a the stand shown below to hold the mobile phone on a shelf with spac
 
 <img src="../mobile_phone_stand/base.png" width="200"/> <img src="../mobile_phone_stand/top.png" width="200"/>
 
-This was designed for a Samsung M30S phone. It should be simple enough to change the width and depth to accommodate other types of phone if required.
+This was designed for a Samsung M30S phone. It should be simple enough to change the width and depth of the freecad model files to accommodate other types of phone if required.
 
 The stand was 3D printed using PETG filament.
