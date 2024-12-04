@@ -17,13 +17,13 @@ The three fields at the top of the page are
 
 - Ready by
 
-    This is the time in HH:MM that you wish the car to be charged to the required level so that you can use it.
+    You may enter the time that you wish the EV to be charged in HH:MM format. When calculating the charge, this time will be taken into account.
 
 The buttons have the following functions.
 
 - CALC
 
-    Calculate the optimal charge schedule to give the lowest cost charge.
+    Calculate the optimal charge schedule to give the lowest cost charge and plot the results.
 
 - SET
 
@@ -40,16 +40,16 @@ The buttons have the following functions.
 
 The example below shows how to setup an EV charge.
 
-- Enter the required target EV charge level.
+- Optionally change the required target EV charge level.
 - Enter the current EV charge level.
-- Enter the ready by time (optional).
+- Optionally set/change the ready by time.
 - Select the CALC button.
 
 The following is then displayed
 
 <img src="images/zappi_calc_charge_1.png" width="500"/>
 
-This shows the time required to achieve the target EV charge level. In this case the target charge level was 80% and the calculated charge would charge the battery to 79%. The difference is because the zappi charges in 15 minute chunks. Therefore the exact target charge level may not be achieved. In such a situation you can make small changes to the target charge level if required. This allows you to add an extra 15 minutes of charge. In the above example if the target charge level is changed to 82% the charge time changes to 195 minutes, as shown below.
+This shows the time required to achieve the target EV charge level. In this case the target charge level was 80% and the calculated charge would charge the battery to 79%. The difference is because the zappi charges in 15 minute chunks. Therefore the exact target charge level may not be achieved. In such a situation you can make small changes to the target charge level if required. This allows you to cause an extra 15 minutes of charge to be added. In the above example if the target charge level is changed to 82% the charge time changes to 195 minutes, as shown below.
 
 <img src="images/zappi_calc_charge_2.png" width="500"/>
 
@@ -57,15 +57,15 @@ The graph shows the tariff in green and the charge period in red. You may zoom i
 
 Once you are happy with the selected charge times you can press the SET button to apply the schedule to your zappi charger. If the schedule is successfully uploaded to the myenergi system the SET button background will turn purple to indicate that a schedule has been set. The SET button will turn green while the EV is being charged.
 
-If you wish to check the schedule that has been uploaded to the myenergi system you may select the GET button. It takes some time (5 minutes or more sometimes) for the myenergi system to update the charge schedule. If the GET button is selected before the myenergu zappi charge schedule has been updated the following will be displayed.
+If you wish to check the schedule that has been uploaded to the myenergi system you may select the GET button. It takes some time (5 minutes or more sometimes) for the myenergi system to update the charge schedule. If the GET button is selected before the myenergu zappi charge schedule has been updated the following may be displayed.
 
 <img src="images/zappi_calc_charge_4.png" width="500"/>
 
-If you wait some time before the GET button is selected the schedule will be displayed as shown below.
+If you wait before the GET button is selected the schedule will be displayed as shown below.
 
 <img src="images/zappi_calc_charge_5.png" width="500"/>
 
-In the above example the Intelligent Octopus Go tariff was used. However if (in the settings tab) the Octopus Agile tariff is selected then when the CALC button is selected the variable tariff (in 30 minute chunks) for the next period of time is read from the internet. If using the Agile tariff it is recommended that you select the CALC button after 4:00 - 4:15 PM as this is when the Agile tariff values are updated for the next day.
+In the above example the Intelligent Octopus Go tariff was used. However if (in the settings tab) the Octopus Agile tariff is selected, then when the CALC button is selected the variable tariff (in 30 minute chunks) for the next period of time is read from the internet. If using the Agile tariff it is recommended that you select the CALC button after 4:00 - 4:15 PM as this is when the Agile tariff values are updated for the next day.
 
 An example of selecting the CALC button when the Octopus Agile tariff was configured is shown below.
 
@@ -75,5 +75,4 @@ An example of selecting the CALC button when the Octopus Agile tariff was config
 ### Note
 
 - In some cases (E.G if the weather is very cold) you may find that your EV does not charge at full rate (7.4 or 22 kW) until the battery has warmed up. In such situations you may find the target charge level is not reached using the schedule set.
-
-
+- You can always switch to the myenergi mobile app to see the EV charging schedules and update them as you wish using the myenergi app.
