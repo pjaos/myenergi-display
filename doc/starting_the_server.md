@@ -23,7 +23,7 @@ The server is now running and waiting for web browsers to connect to it (you may
 http://192.168.0.95:8080
 ```
 
-You mobile device should display then following
+Your mobile device should then display the following
 
 <img src="images/startup_no_configuration.png" width="300"/>
 
@@ -31,7 +31,7 @@ As the configuration has not yet been entered the temperatures of the top and bo
 
 
 # Auto starting the myenergi display server
-The myenergy display app can be auto started when on boot/startup by entering the following command on Linux computers (E.G Raspberry Pi zero 2).
+The myenergy display app can be auto started during startup by entering the following command on Linux computers (E.G Raspberry Pi zero 2).
 
 ```
 root@machinename:/root/# myenergi_display --enable_auto_start
