@@ -11,11 +11,9 @@ I used a [Raspberry Pi zero 2 W](https://www.raspberrypi.com/products/raspberry-
 - Create an SD Card using the RPI Imager software. Use the RPi image options to
 
     - Setup your wifi network and password.
-    - Enable ssh and add your public ssh key to it to allow you to log into the RPi without a password.
-      You should have previously setup a local ssh key pair (public/private) on the machine you are using to connect from. More
-      details on how to create ssh key pairs (public/private) can be found [here](https://www.ssh.com/academy/ssh/keygen).
+    - Enable ssh.
 
-- Install the SD card into the RPi and power it up. As you entered your WiFi details in the previous step it should connect to your WiFi network. You will need to find out it's IP address on your WiFi network. Your routers DHCP server should have assigned an IP address to the RPi device. The web user interface on your router should show the IP address that the router assigned to the RPi device when it booted.
+- Install the SD card into the RPi and power it up. As you entered your WiFi details in the previous step it should connect to your WiFi network. You will need to find out it's IP address on your WiFi network so that you can connect to it via ssh. Your routers DHCP server should have assigned an IP address to the RPi device. The user interface on your router should show the IP address that the router assigned to the RPi device when it booted.
 
 - Connect to the RPi via ssh.
     - If the IP address if the RPi device was 192.168.0.20 and the user you created when using the RPI Imager software was auser then you should be able to connect to the Raspberry Pi using a command such as 'ssh auser@192.168.0.20'.
@@ -31,6 +29,7 @@ Codename:	bookworm
 ```
 
 - Install pipx
+
 pipx allows python applications to be executed in isolated environments. Run the commands below to install the pipx software.
 
 ```
