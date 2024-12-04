@@ -1916,7 +1916,7 @@ def main():
     options = None
 
     try:
-        parser = argparse.ArgumentParser(description="ngt examples.",
+        parser = argparse.ArgumentParser(description="A program that provides a display interface for myenergi products.",
                                          formatter_class=argparse.RawDescriptionHelpFormatter)
         parser.add_argument("-p", "--port",    type=int, help=f"The TCP server port to which the GUI server is bound to (default={GUIServer.DEFAULT_SERVER_PORT}).", default=GUIServer.DEFAULT_SERVER_PORT)
         parser.add_argument("--reload",        action='store_true', help="Reload/Restart GUI when python file is updated. Useful for in dev env.")
