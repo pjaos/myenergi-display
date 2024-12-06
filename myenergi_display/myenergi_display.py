@@ -1185,11 +1185,11 @@ class GUIServer(object):
 
     def _calc_cost_initial_step(self):
         """@brief Octopus Energy (and maybe other providers) currently send notifications to some customers (in areas that have high levels of green energy)
-                  that they can have periods of time with free electricity (Octopus Energy refer to these as 'Power Ups').
+                  that they can have periods of time with free energy (Octopus Energy refer to these as 'Power Ups').
                   If the user selected the 'Free energy period' dialog then the user can enter the up coming free energy period so that the calculation of
                   the optimal charge time takes this into account."""
         if self._free_energy_checkbox.value:
-            self._add_free_elect_period_dialog = YesNoDialog("Add free electricty period.",
+            self._add_free_elect_period_dialog = YesNoDialog("Add free energy period.",
                                                 self._free_period_entered,
                                                 successButtonText="OK",
                                                 failureButtonText="Cancel")
@@ -1200,7 +1200,7 @@ class GUIServer(object):
             self._calc_optimal_charge_times()
 
     def _free_period_entered(self):
-        """@brief Called if the user enters a period of time when they should get free electricity. E.G Octopus 'Power Ups'"""
+        """@brief Called if the user enters a period of time when they should get free energy. E.G Octopus 'Power Ups'"""
         start_time = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_START_TIME)
         duration = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_DURATION)
         self._calc_optimal_charge_times(free_start_time=start_time, free_duration=duration)
@@ -1677,12 +1677,12 @@ class GUIServer(object):
                                    plot_time_stamp_list,
                                    plot_cost_list):
         """@brief UPdate the tariff periods with any free energy periods.
-           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
-           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
            @param plot_time_stamp_list A list of the tariff times.
            @param plot_cost_list A list of the tariff costs."""
 
-        # If the user has entered a period of time when they will get free electricity
+        # If the user has entered a period of time when they will get free energy
         if free_start_time_hh_mm and free_duration_hh_mm:
             # Update the tariff values with the zero cost energy times.
             free_start_time = None
@@ -1715,8 +1715,8 @@ class GUIServer(object):
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
            @param charge_rate_kw The rate at which the charger will charge the EV in kW.
            @param region_code The regional electricity code.
-           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
-           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
            @return A tuple containing
                    0: A list of charge details dicts.
                    1: The end charge time (datetime instance)
@@ -1819,8 +1819,8 @@ class GUIServer(object):
            @param charge_mins The required charge time in mins.
            @param charge_rate_kw The EV charge rate in kW.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
-           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
-           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
            @return A dict containing the slots that the car should charge in."""
         try:
             charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
