@@ -643,6 +643,12 @@ class GUIServer(object):
     BUTTON_MID_INDEX = 1
     BUTTON_HIGH_INDEX = 2
 
+    ADD_TARIFF_START_TIME = "Start time"
+    ADD_TARIFF_PRICE = "Price (£)"
+
+    ZERO_COST_ELEC_START_TIME = "Start time"
+    ZERO_COST_ELEC_DURATION = "Duration"
+
     @staticmethod
     def Print_Exception():
         """@brief Print an exception traceback."""
@@ -1173,9 +1179,31 @@ class GUIServer(object):
                                               self._tariff_value_entered,
                                               successButtonText="OK",
                                               failureButtonText="Cancel")
-        self._add_tariff_dialog.addField("Start time", YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
-        self._add_tariff_dialog.addField("Price (£)", YesNoDialog.NUMBER_INPUT_FIELD_TYPE, minNumber=0, maxNumber=2, step=0.01)
+        self._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+        self._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_PRICE, YesNoDialog.NUMBER_INPUT_FIELD_TYPE, minNumber=0, maxNumber=2, step=0.01)
         self._add_tariff_dialog.show()
+
+    def _calc_cost_initial_step(self):
+        """@brief Octopus Energy (and maybe other providers) currently send notifications to some customers (in areas that have high levels of green energy)
+                  that they can have periods of time with free electricity (Octopus Energy refer to these as 'Power Ups').
+                  If the user selected the 'Free energy period' dialog then the user can enter the up coming free energy period so that the calculation of
+                  the optimal charge time takes this into account."""
+        if self._free_energy_checkbox.value:
+            self._add_free_elect_period_dialog = YesNoDialog("Add free electricty period.",
+                                                self._free_period_entered,
+                                                successButtonText="OK",
+                                                failureButtonText="Cancel")
+            self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+            self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_DURATION, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+            self._add_free_elect_period_dialog.show()
+        else:
+            self._calc_optimal_charge_times()
+
+    def _free_period_entered(self):
+        """@brief Called if the user enters a period of time when they should get free electricity. E.G Octopus 'Power Ups'"""
+        start_time = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_START_TIME)
+        duration = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_DURATION)
+        self._calc_optimal_charge_times(free_start_time=start_time, free_duration=duration)
 
     def _get_hour_min(self, tstr):
         """@brief Get the hour and min from a single tariff point.
@@ -1196,8 +1224,8 @@ class GUIServer(object):
         return (hour, min)
 
     def _tariff_value_entered(self):
-        start_time = self._add_tariff_dialog.getValue('Start time')
-        price = self._add_tariff_dialog.getValue("Price (£)")
+        start_time = self._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_START_TIME)
+        price = self._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_PRICE)
         try:
             if start_time and len(start_time) > 0 and price > 0.0:
                 hour, min = self._get_hour_min(start_time)
@@ -1403,12 +1431,14 @@ class GUIServer(object):
         self._end_charge_time_input = self._get_input_time_field('Ready by')
         self._end_charge_time_input.value = self._cfg_mgr.getAttr(GUIServer.READY_BY)
 
+        self._free_energy_checkbox = ui.checkbox('Free energy period')
+
         with ui.row():
             # A plot of energy costs is added to this container when the users requests it
             self._plot_container = ui.element('div')
 
         with ui.row():
-            self._calc_button = ColorButton(self._calc_optimal_charge_times, 'Calc')
+            self._calc_button = ColorButton(self._calc_cost_initial_step, 'Calc')
             self._calc_button.tooltip("Calculate the optimal charge time/s.")
             self._set_button = ColorButton(self._set_zappi_charge, 'Set')
             self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.')
@@ -1500,23 +1530,40 @@ class GUIServer(object):
            @return A tuple
                    0 = Hours
                    1 = mins"""
+        return self._get_hours_mins(self._end_charge_time_input.value)
+
+    def _get_hours_mins(self, text):
+        """@brief Get the hours and minutes from a string.
+           @param text The text in HH:MM format.
+           @return A tuple
+                   0 = Hours
+                   1 = mins
+
+                   o None if not valid."""
         hours = None
         mins = None
-        elems = self._end_charge_time_input.value.split(':')
-        if len(elems) == 2:
-            hours_str = elems[0]
-            mins_str = elems[1]
-            try:
-                hours = int(hours_str)
-                mins = int(mins_str)
-            except ValueError:
-                pass
+        if text and len(text) >= 3:
+            elems = text.split(':')
+            if len(elems) == 2:
+                hours_str = elems[0]
+                mins_str = elems[1]
+                try:
+                    hours = int(hours_str)
+                    mins = int(mins_str)
+                except ValueError:
+                    pass
+
         if hours is not None and mins is not None:
             return (hours, mins)
+
         return None
 
-    def _calc_optimal_charge_times(self):
+    def _calc_optimal_charge_times(self, free_start_time="", free_duration=""):
         """@brief Calculate the optimal charge times."""
+
+        free_start_time_hh_mm = self._get_hours_mins(free_start_time)
+        free_duration_hh_mm = self._get_hours_mins(free_duration)
+
         self._save_config(show_info=False)
 
         current_ev_charge_percentage = float(self._current_ev_charge_input.value)
@@ -1568,7 +1615,9 @@ class GUIServer(object):
         threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
                                                                              charge_time_mins,
                                                                              float(self._zappi_max_charge_rate.value),
-                                                                             self._get_end_charge_time())).start()
+                                                                             self._get_end_charge_time(),
+                                                                             free_start_time_hh_mm,
+                                                                             free_duration_hh_mm)).start()
 
     def _get_region_code(self):
         """@brief Get the electricity region code.
@@ -1623,12 +1672,51 @@ class GUIServer(object):
 
         return (time_intervals, price_list)
 
-    def _get_charge_details(self, charge_mins, end_charge_time, charge_rate_kw, region_code):
+    def _update_free_periods(self, free_start_time_hh_mm,
+                                   free_duration_hh_mm,
+                                   plot_time_stamp_list,
+                                   plot_cost_list):
+        """@brief UPdate the tariff periods with any free energy periods.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
+           @param plot_time_stamp_list A list of the tariff times.
+           @param plot_cost_list A list of the tariff costs."""
+
+        # If the user has entered a period of time when they will get free electricity
+        if free_start_time_hh_mm and free_duration_hh_mm:
+            # Update the tariff values with the zero cost energy times.
+            free_start_time = None
+            free_stop_time = None
+            for index in range(0, len(plot_time_stamp_list)):
+                ts = plot_time_stamp_list[index]
+                if ts.hour == free_start_time_hh_mm[0]:
+                    # We assume that the HH:MM entered by the user is the next HH:MM that come round.
+                    free_start_time = plot_time_stamp_list[index].replace(hour=free_start_time_hh_mm[0], minute=free_start_time_hh_mm[1], second=0, microsecond=0)
+                    free_stop_time = free_start_time + timedelta(hours=free_duration_hh_mm[0], minutes=free_duration_hh_mm[1])
+                    break
+
+            # If we have a free energy period
+            if free_start_time and free_stop_time:
+                # Set the cost of energy in this period to 0
+                for index in range(0, len(plot_time_stamp_list)):
+                    ts = plot_time_stamp_list[index]
+                    if ts >= free_start_time and ts <= free_stop_time:
+                        plot_cost_list[index] = 0.0
+
+    def _get_charge_details(self,
+                            charge_mins,
+                            end_charge_time,
+                            charge_rate_kw,
+                            region_code,
+                            free_start_time_hh_mm,
+                            free_duration_hh_mm):
         """@brief Get the requested charge details.
            @param charge_mins The required charge time in mins.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
            @param charge_rate_kw The rate at which the charger will charge the EV in kW.
            @param region_code The regional electricity code.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
            @return A tuple containing
                    0: A list of charge details dicts.
                    1: The end charge time (datetime instance)
@@ -1657,6 +1745,9 @@ class GUIServer(object):
         slot_end_t = plot_time_stamp_list[1]
         slot_duration = slot_end_t-slot_start_t
         slot_duration_mins = slot_duration.total_seconds()/60.0
+
+        # Update the slots with any free energy periods
+        self._update_free_periods(free_start_time_hh_mm, free_duration_hh_mm, plot_time_stamp_list, plot_cost_list)
 
         time_stamp_list = plot_time_stamp_list
         cost_list = plot_cost_list
@@ -1719,19 +1810,25 @@ class GUIServer(object):
                                          region_code,
                                          charge_mins,
                                          charge_rate_kw,
-                                         end_charge_time):
+                                         end_charge_time,
+                                         free_start_time_hh_mm,
+                                         free_duration_hh_mm):
         """@brief Calculate optimal charge times.
            @param region_code The regional electricity code.
            @param plot_container The container that will hold the plot.
            @param charge_mins The required charge time in mins.
            @param charge_rate_kw The EV charge rate in kW.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
+           @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free electricity period or None if no free electricity period is available.
+           @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free electricity period or None if no free electricity period is available.
            @return A dict containing the slots that the car should charge in."""
         try:
             charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
                                                                                                                                                  end_charge_time,
                                                                                                                                                  charge_rate_kw,
-                                                                                                                                                 region_code)
+                                                                                                                                                 region_code,
+                                                                                                                                                 free_start_time_hh_mm,
+                                                                                                                                                 free_duration_hh_mm)
 
             msg_dict = {}
             msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
