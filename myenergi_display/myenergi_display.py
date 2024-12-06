@@ -1395,7 +1395,7 @@ class GUIServer(object):
         with ui.row().classes('w-full'):
             with ui.row().classes('w-full'):
                 ui.label('Current EV charge (%)')
-                self._current_ev_charge_input = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+                self._current_ev_charge_input = ui.number(min=0, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
             self._current_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
 
         # Put this off the bottom of the mobile screen as most times it will not be needed
@@ -1521,6 +1521,10 @@ class GUIServer(object):
 
         current_ev_charge_percentage = float(self._current_ev_charge_input.value)
         target_ev_charge_percentage = float(self._target_ev_charge_input.value)
+        if target_ev_charge_percentage > 100:
+            ui.notify("The target EV charge cannot be greater than 100 %.", type='negative')
+            return
+
         # Define the target as a float at the top end of the value.
         target_ev_charge_percentage = float(int(self._target_ev_charge_input.value)) + 0.99
 
@@ -1532,10 +1536,6 @@ class GUIServer(object):
 
         target_charge_factor = target_ev_charge_percentage/100.0
         current_charge_factor = current_ev_charge_percentage/100.0
-
-        if target_ev_charge_percentage > 100:
-            ui.notify("The target EV charge cannot be greater than 100 %.", type='negative')
-            return
 
         if current_charge_factor > 1.0:
             ui.notify("The current EV charge cannot be greater than 100 %.", type='negative')
@@ -1793,6 +1793,10 @@ class GUIServer(object):
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
                 battery_charged_kwh = current_battery_kwh+kwh
                 battery_charged_percentage = (battery_charged_kwh/battery_capacity_kwh)*100.0
+                # we may be charging slightly longer than is required (duie to 15 min charge increments)
+                # so limit the max to 100%
+                if battery_charged_percentage > 100.0:
+                    battery_charged_percentage = 100.0
                 ui.label(f"Charge for {int(total_charge_mins)} minutes to reach {battery_charged_percentage:.0f}%")
                 ui.label(f"using {kwh:.1f} kWh of energy (cost = £{cost:.2f}).")
 
