@@ -34,13 +34,15 @@ If you see any error messages check the myenergi API key, eddi and zappi serial 
 ### Adding Other Tariff details
 If you have a zappi EV charger and are not on the Octopus Agile tariff then you should select the Other Tariff radio button. In this case you must enter your tariff details for a 24 hour period.
 
-- Fixed price tariff
+### Fixed price tariff
 
 If you are on a fixed price tariff (same cost per kWh throughout the day and night), select the ADD button and enter the time as 0:0 and your electricity price in £ per kWh. In the example below the price entered was 0.25. Select the OK button and your tariff should be plotted as shown below.
 
 <img src="images/settings_fixed_price_tariff.png" width="300"/>
 
-- Variable tariff
+Once the tariff values have been entered you must select the SAVE button to save them persistently.
+
+### Variable tariff
 
 If you are on a tariff that changes through the day/night you should enter the tariff at 0:0 (12 AM) first as shown below. In this case the tariff value was £0.07 per kWh.
 
@@ -54,7 +56,7 @@ Repeat this process until the graph shows all the changes in your tariff value t
 
 <img src="images/settings_other_tariff_3.png" width="300"/>
 
-Select the SAVE button to save the configuration persistently.
+Once the tariff values have been entered you must select the SAVE button to save them persistently.
 
 The example above shows the values for the Intelligent Octopus Go tariff.
 
