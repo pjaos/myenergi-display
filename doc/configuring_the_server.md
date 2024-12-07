@@ -40,7 +40,7 @@ If you are on a fixed price tariff (same cost per kWh throughout the day and nig
 
 <img src="images/settings_fixed_price_tariff.png" width="300"/>
 
-Once the tariff values have been entered you must select the SAVE button to save them persistently.
+Once the tariff values have been entered you must select the SAVE button to save the config persistently.
 
 ### Variable tariff
 
@@ -56,7 +56,7 @@ Repeat this process until the graph shows all the changes in your tariff value t
 
 <img src="images/settings_other_tariff_3.png" width="300"/>
 
-Once the tariff values have been entered you must select the SAVE button to save them persistently.
+Once the tariff values have been entered you must select the SAVE button to save the config persistently.
 
 The example above shows the values for the Intelligent Octopus Go tariff.
 
