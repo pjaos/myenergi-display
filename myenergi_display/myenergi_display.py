@@ -1190,9 +1190,9 @@ class GUIServer(object):
                   the optimal charge time takes this into account."""
         if self._free_energy_checkbox.value:
             self._add_free_elect_period_dialog = YesNoDialog("Add free energy period.",
-                                                self._free_period_entered,
-                                                successButtonText="OK",
-                                                failureButtonText="Cancel")
+                                                             self._free_period_entered,
+                                                             successButtonText="OK",
+                                                             failureButtonText="Cancel")
             self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
             self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_DURATION, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
             self._add_free_elect_period_dialog.show()
@@ -1672,10 +1672,11 @@ class GUIServer(object):
 
         return (time_intervals, price_list)
 
-    def _update_free_periods(self, free_start_time_hh_mm,
-                                   free_duration_hh_mm,
-                                   plot_time_stamp_list,
-                                   plot_cost_list):
+    def _update_free_periods(self,
+                             free_start_time_hh_mm,
+                             free_duration_hh_mm,
+                             plot_time_stamp_list,
+                             plot_cost_list):
         """@brief UPdate the tariff periods with any free energy periods.
            @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
            @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
