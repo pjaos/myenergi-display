@@ -613,7 +613,7 @@ class GUIServer(object):
     TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
-    TEMP_UPDATE_SECONDS = 5.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
+    STATS_UPDATE_SECONDS = 10.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
     DEFAULT_SERVER_PORT = 8080
     GUI_POLL_SECONDS = 0.1
     TARIFF_LIST = ["Octopus Agile Tariff", 'Other Tariff']
@@ -665,8 +665,8 @@ class GUIServer(object):
         # This queue is used to send commands from any thread to the GUI thread.
         self._to_gui_queue = Queue()
         self._my_energi = MyEnergi('')
-        self._eddi_update_seconds = GUIServer.TEMP_UPDATE_SECONDS
-        self._next_temp_update_time = time()+self._eddi_update_seconds
+        self._stats_update_seconds = GUIServer.STATS_UPDATE_SECONDS
+        self._next_temp_update_time = time()+self._stats_update_seconds
         self._heater_load_watts = 0
         self._zappi_charge_watts = 0
         self._relay_on = 0
@@ -860,7 +860,7 @@ class GUIServer(object):
             # This stops many threads backing up if there are internet connectivity issues.
             if self._read_temp_thread is None or not self._read_temp_thread.isAlive():
                 self._read_temp_thread = threading.Thread(target=self._update_stats).start()
-            self._next_temp_update_time = time()+self._eddi_update_seconds
+            self._next_temp_update_time = time()+self._stats_update_seconds
 
         heater_on = self._get_heater_on()
         if heater_on == 1:
