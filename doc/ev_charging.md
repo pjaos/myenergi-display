@@ -68,7 +68,7 @@ Once you are happy with the selected charge times you can press the SET button t
 
 <img src="images/zappi_calc_charge_3.png" width="500"/>
 
-The SET button will turn green while the EV is being charged.
+The SET button will turn green while the EV is being charged. Once the scheduled zappi charge period has passed the charge schedule is reset.
 
 If you wish to check the schedule that has been uploaded to the myenergi system you may select the GET button. It takes some time (5 minutes or more sometimes) for the myenergi system to update the charge schedule. If the GET button is selected before the myenergu zappi charge schedule has been updated the following may be displayed.
 
