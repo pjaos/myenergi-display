@@ -613,7 +613,7 @@ class GUIServer(object):
     TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
-    STATS_UPDATE_SECONDS = 10.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
+    STATS_UPDATE_SECONDS = 60.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
     DEFAULT_SERVER_PORT = 8080
     GUI_POLL_SECONDS = 0.1
     TARIFF_LIST = ["Octopus Agile Tariff", 'Other Tariff']
