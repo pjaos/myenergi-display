@@ -688,7 +688,6 @@ class GUIServer(object):
     def _read_stats_now(self):
         """@brief Determine if it's time to read the stats from the myenergi server.
            @return True if it's time, False if not."""
-        stats_read_time = None
         read_stats_now = False
         if self._init_stats_read_delay:
             self._init_stats_read_delay = False
