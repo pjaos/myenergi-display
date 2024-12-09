@@ -613,7 +613,9 @@ class GUIServer(object):
     TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
-    STATS_UPDATE_SECONDS = 60.0                 # We don't want to poll the myenergi server to fast as it will load it unnecessarily.
+    MIN_STATS_UPDATE_SECONDS = 10.0                 # The minimum time between myenergi server stats reads.
+    MAX_STATS_UPDATE_SECONDS = 60.0                 # The maximum time between myenergi server stats reads.
+    STATS_READ_INC_FACTOR = 1.2                     # Choose a factor that will cause the stats read delay to reach maximum in about 6 minutes.
     DEFAULT_SERVER_PORT = 8080
     GUI_POLL_SECONDS = 0.1
     TARIFF_LIST = ["Octopus Agile Tariff", 'Other Tariff']
@@ -662,11 +664,9 @@ class GUIServer(object):
            @param port The TCP port to bind the nicegui server."""
         self._uio = uio
         self._port = port
-        # This queue is used to send commands from any thread to the GUI thread.
-        self._to_gui_queue = Queue()
+        self._init_stats_read_delay = True            # A flag to initialize the stats read time
+        self._to_gui_queue = Queue()    # This queue is used to send commands from any thread to the GUI thread.
         self._my_energi = MyEnergi('')
-        self._stats_update_seconds = GUIServer.STATS_UPDATE_SECONDS
-        self._next_temp_update_time = time()+self._stats_update_seconds
         self._heater_load_watts = 0
         self._zappi_charge_watts = 0
         self._relay_on = 0
@@ -680,6 +680,51 @@ class GUIServer(object):
         self._clear_zappi_button = None
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
+
+    def _reset_polling_rate(self):
+        """@brief This is called to reset the polling rate (set to min delay between reads)."""
+        self._init_stats_read_delay = True
+
+    def _read_stats_now(self):
+        """@brief Determine if it's time to read the stats from the myenergi server.
+           @return True if it's time, False if not."""
+        stats_read_time = None
+        read_stats_now = False
+        if self._init_stats_read_delay:
+            self._init_stats_read_delay = False
+            self._next_stats_read_time = time() + GUIServer.MIN_STATS_UPDATE_SECONDS
+            self._current_stats_read_delay = GUIServer.MIN_STATS_UPDATE_SECONDS
+            read_stats_now = True
+            self._debug(f"self._read_stats_now(): Read stats {GUIServer.MIN_STATS_UPDATE_SECONDS} seconds from now.")
+
+        else:
+            # When running the stats are read from the myenergi server. The delay between
+            # each read starts at GUIServer.MIN_STATS_UPDATE_SECONDS and moves to
+            # GUIServer.MAX_STATS_UPDATE_SECONDS as time passes.
+
+            # If we are in a state where the read delay has reached the max, calc the next read time.
+            if self._current_stats_read_delay >= GUIServer.MAX_STATS_UPDATE_SECONDS:
+                self._current_stats_read_delay = GUIServer.MAX_STATS_UPDATE_SECONDS
+                # If its time to read stats
+                if time() >= self._next_stats_read_time:
+                    read_stats_now = True
+                    # Calc the next read time.
+                    self._next_stats_read_time = time() + self._current_stats_read_delay
+                    self._debug(f"self._read_stats_now(): Max stats read delay of {self._current_stats_read_delay} seconds reached.")
+
+            else:
+                # If its time to read stats
+                if time() >= self._next_stats_read_time:
+                    # Inc the delay between reads and calc the next read time.
+                    new_stats_read_delay = self._current_stats_read_delay * GUIServer.STATS_READ_INC_FACTOR
+                    self._next_stats_read_time = time() + new_stats_read_delay
+                    read_stats_now = True
+                    self._current_stats_read_delay = new_stats_read_delay
+                    if self._current_stats_read_delay > GUIServer.MAX_STATS_UPDATE_SECONDS:
+                        self._current_stats_read_delay = GUIServer.MAX_STATS_UPDATE_SECONDS
+                    self._debug(f"self._read_stats_now(): Read stats in {self._current_stats_read_delay} seconds time.")
+
+        return read_stats_now
 
     def _load_config(self):
         """@brief Load the config from a config file."""
@@ -853,14 +898,13 @@ class GUIServer(object):
             if isinstance(rxMessage, dict):
                 self._process_rx_dict(rxMessage)
 
-        if time() >= self._next_temp_update_time:
+        # If it's time toe read the stats
+        if self._read_stats_now():
             # Don't update the tank temperatures in the gui thread or the gui thread will block
             # if there are issues getting data over the internet.
             # Only start a new thread if we haven't started one yet or the old one has completed.
             # This stops many threads backing up if there are internet connectivity issues.
-            if self._read_temp_thread is None or not self._read_temp_thread.isAlive():
-                self._read_temp_thread = threading.Thread(target=self._update_stats).start()
-            self._next_temp_update_time = time()+self._stats_update_seconds
+            self._read_temp_thread = threading.Thread(target=self._update_stats).start()
 
         heater_on = self._get_heater_on()
         if heater_on == 1:
@@ -1003,18 +1047,21 @@ class GUIServer(object):
         self._enable_buttons(True)
         ui.notify("Setting top boost on.", position='center')
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP)).start()
+        self._reset_polling_rate()
 
     def _bottom_boost(self):
         self._eddi_heater_button_selected = 2
         self._enable_buttons(True)
         ui.notify("Setting bottom boost on.", position='center')
         threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM)).start()
+        self._reset_polling_rate()
 
     def _stop_boost(self):
         self._eddi_heater_button_selected = 0
         self._enable_buttons(True)
         ui.notify("Turning off boost.", position='center')
         threading.Thread(target=self._set_boost, args=(False, None)).start()
+        self._reset_polling_rate()
 
     def _update_gui(self, msg_dict):
         """@brief Send a message to the GUI to update it.
@@ -1924,6 +1971,7 @@ class GUIServer(object):
         else:
             ui.notify("Setting zappi charge schedule", position='center')
             threading.Thread(target=self._set_zappi_charge_thread).start()
+            self._reset_polling_rate()
 
     def _set_zappi_charge_thread(self):
         # Sort the dicts in the list on the slot start time. The slot closest in time will be first in the list.
