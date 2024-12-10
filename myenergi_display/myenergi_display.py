@@ -421,7 +421,7 @@ class MyEnergi(object):
 
         # I tried removing any existing charge schedules.
         # However if this is executed then the charge schedule fails to get set.
-        # Not sure why this occurs but it looks like a myenergi cloud issue.
+        # Not sure why this occurs.
 #        self.set_all_zappi_schedules_off()
 
         # The zappi charger must be in eco+ mode.
