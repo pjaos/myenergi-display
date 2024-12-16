@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# Many thanks to Andy Twonk (https://github.com/twonk/MyEnergi-App-Api) for details the myenergi api
+# used in this project.
+
 import argparse
 import threading
 import requests
@@ -33,6 +36,11 @@ class MyEnergi(object):
     TANK_TOP = 1
     TANK_BOTTOM = 2
     BASE_URL = 'https://s18.myenergi.net/'
+    TOP_TANK_ID = 1
+    BOTTOM_TANK_ID = 2
+    TANK_1_BOOST_SCHEDULE_SLOT_ID = 14
+    TANK_2_BOOST_SCHEDULE_SLOT_ID = 24
+    VALID_EDDI_SLOT_ID_LIST = (11, 12, 13, TANK_1_BOOST_SCHEDULE_SLOT_ID, 21, 22, 23, TANK_2_BOOST_SCHEDULE_SLOT_ID)
     VALID_ZAPPI_SLOT_ID_LIST = (11, 12, 13, 14)
     ZAPPI_CHARG_MODE_FAST = 1
     ZAPPI_CHARGE_MODE_ECO = 2
@@ -287,6 +295,64 @@ class MyEnergi(object):
 
         self._exec_api_cmd(url)
 
+    def set_tank_schedule(self, on, on_datetime, duration_timedelta, tank):
+        """@brief Set a schedule on the hot water tank.
+           @param on If True add a schedule. If False delete a schedule.
+           @param on_datetime A datetime instance that defines the on time for the tank heater.
+           @param duration_timedelta A timedelta instance that defines ho long the tank heater should stay on.
+           @param tank The hot water tank (1=top, 2 = bottom)."""
+        sched_sub_str = self._get_eddi_schedule_string(on, on_datetime, duration_timedelta, tank)
+        url = MyEnergi.BASE_URL + f"cgi-boost-time-E{self._eddi_serial_number}-{sched_sub_str}"
+        self._exec_api_cmd(url)
+
+    def set_water_tank_boost_schedules_off(self):
+        """@brief Set the boost tank water schedule off. We reserve the fourth schedule timer for this boost setting, leaving the other timers untouched.
+                  Note, we use MyEnergi.TANK_1_BOOST_SCHEDULE_SLOT_ID and MyEnergi.TANK_2_BOOST_SCHEDULE_SLOT_ID schedules for boost purposes
+                  rather than using the boost interface commands for the reason details in the _set_boost() method."""
+        self.set_tank_schedule(False, None, None, MyEnergi.TOP_TANK_ID)
+        self.set_tank_schedule(False, None, None, MyEnergi.BOTTOM_TANK_ID)
+
+    def _get_eddi_schedule_string(self, on, on_datetime, duration_timedelta, tank):
+        """@brief Get a timed schedule for a hot water tank.
+
+            cgi-boost-time-E<eddi serial number>-<slot id>-<start time>-<duration>-<day spec>
+
+                start time and duration are both numbers like 60*hours+minutes
+                day spec is as bdd above'
+
+            This method returns part of the above string as detailed below.
+
+            '<slot id>-<start time>-<duration>-<day spec>'
+
+           @param on_datetime A datetime instance that defines the on time for the tank heater.
+           @param duration_timedelta A timedelta instance that defines ho long the tank heater should stay on.
+           @param tank The hot water tank (1=top, 2 = bottom)."""
+
+        self._check_eddi_serial_number()
+        if tank not in [MyEnergi.TOP_TANK_ID, MyEnergi.BOTTOM_TANK_ID]:
+            raise Exception(f"{tank} is an invalid water tank. Must be {MyEnergi.TOP_TANK_ID} (top) or {MyEnergi.BOTTOM_TANK_ID} (bottom).")
+
+        if tank == 1:
+            slot_id = MyEnergi.TANK_1_BOOST_SCHEDULE_SLOT_ID
+        else:
+            slot_id = MyEnergi.TANK_2_BOOST_SCHEDULE_SLOT_ID
+
+        if on:
+            on_time_string = f"{on_datetime.hour:02d}{on_datetime.minute:02d}"
+            duration_hours, remainder = divmod(duration_timedelta.seconds, 3600)
+            duration_minutes, _ = divmod(remainder, 60)
+            duration_string = f"{duration_hours:01d}{duration_minutes:02d}"
+
+            day_of_week = on_datetime.weekday()
+            day_of_week_string = self._get_day_of_week_string(day_of_week)
+
+            schedule_string = f"{slot_id:02d}-{on_time_string}-{duration_string}-{day_of_week_string}"
+
+        else:
+            schedule_string = f"{slot_id:02d}-0000-000-00000000"
+
+        return schedule_string
+
     def set_all_zappi_schedules_off(self):
         """@brief Set all zappi charge schedules off.
                   We set charge schedules that have no on time and are not enabled for any days of the week.
@@ -294,21 +360,16 @@ class MyEnergi(object):
         self._check_eddi_serial_number()
         self._check_zappi_serial_number()
 
-        for sched in MyEnergi.VALID_ZAPPI_SLOT_ID_LIST:
-            url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-{sched}-0000-000-00000000"
+        for slot_id in MyEnergi.VALID_ZAPPI_SLOT_ID_LIST:
+            url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-{slot_id}-0000-000-00000000"
             self._exec_api_cmd(url)
             # The myenergi system does not always delete the schedule unless a delay occurs between each command
             sleep(1)
 
     def _get_zappi_charge_string(self, charge_slot_dict, slot_id):
         """@detail Get a string that is formated as required by the myenergi zappi api.
-           https://github.com/twonk/MyEnergi-App-Api details the api for setting zappi boost times
 
-           From the above page
-
-           'Set boost times
-
-            cgi-boost-time-E10077777-<slot id>-<start time>-<duration>-<day spec>
+            cgi-boost-time-Z<zappi serial number>-<slot id>-<start time>-<duration>-<day spec>
 
                 start time and duration are both numbers like 60*hours+minutes
                 day spec is as bdd above'
@@ -321,6 +382,10 @@ class MyEnergi(object):
                                    GUIServer._set_zappi_charge_thread()
            @param slot_id The slot ID (one of MyEnergi.VALID_ZAPPI_SLOT_ID_LIST).
         """
+        if slot_id not in MyEnergi.VALID_ZAPPI_SLOT_ID_LIST:
+            valid_list = ",".join(MyEnergi.VALID_ZAPPI_SLOT_ID_LIST)
+            raise Exception(f"{slot_id} is an invalid slot id (value = {valid_list})")
+
         start_datetime = charge_slot_dict[RegionalElectricity.SLOT_START_DATETIME]
         stop_datetime = charge_slot_dict[RegionalElectricity.SLOT_STOP_DATETIME]
         duration_timedelta = stop_datetime-start_datetime
@@ -334,6 +399,16 @@ class MyEnergi(object):
 
         on_time_string = f"{start_datetime.hour:02d}{start_datetime.minute:02d}"
         duration_string = f"{duration_hours:01d}{duration_minutes:02d}"
+        day_of_week_string = self._get_day_of_week_string(day_of_week)
+
+        charge_string = f"{slot_id:02d}-{on_time_string}-{duration_string}-{day_of_week_string}"
+        return charge_string
+
+    def _get_day_of_week_string(self, day_of_week):
+        """@brief Get the day of the week string used in the command sent to the myenergi server.
+           @param day_of_week A single day of the week as an integer 0 - 6.
+           @return The day of the week string in the format accepted by the myenergi server."""
+        day_of_week_string = None
         if day_of_week == 0:
             day_of_week_string = "01000000"
 
@@ -355,8 +430,10 @@ class MyEnergi(object):
         elif day_of_week == 6:
             day_of_week_string = "00000001"
 
-        charge_string = f"{slot_id:02d}-{on_time_string}-{duration_string}-{day_of_week_string}"
-        return charge_string
+        if day_of_week_string is None:
+            raise Exception("{day_of_week} is an invalid day of the week. Must be 0-6")
+
+        return day_of_week_string
 
     def _debug(self, msg):
         if self._uio:
@@ -585,6 +662,7 @@ class GUIServer(object):
     TARGET_EV_CHARGE_PERCENTAGE = "TARGET_EV_CHARGE_PERCENTAGE"
     READY_BY = "READY_BY"
     CLEAR_ZAPPI_SCHEDULE_TIME = "CLEAR_ZAPPI_SCHEDULE_TIME"
+    CLEAR_EDDI_SCHEDULE_TIME = "CLEAR_EDDI_SCHEDULE_TIME"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -597,7 +675,8 @@ class GUIServer(object):
                       CURRENT_EV_CHARGE_PERCENTAGE: 20,
                       TARGET_EV_CHARGE_PERCENTAGE: 80,
                       READY_BY: "",
-                      CLEAR_ZAPPI_SCHEDULE_TIME: ""}
+                      CLEAR_ZAPPI_SCHEDULE_TIME: "",
+                      CLEAR_EDDI_SCHEDULE_TIME: ""}
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
@@ -680,6 +759,8 @@ class GUIServer(object):
         self._clear_zappi_button = None
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
+        # Attr used to convert boost time slider seconds into HH:MM
+        self._boost_time_value = None
 
     def _reset_polling_rate(self):
         """@brief This is called to reset the polling rate (set to min delay between reads)."""
@@ -926,9 +1007,27 @@ class GUIServer(object):
                 self._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         now = datetime.now()
+        clear_eddi_boost_schedule_time = self._get_clear_eddi_boost_schedule_time()
+        if clear_eddi_boost_schedule_time and clear_eddi_boost_schedule_time <= now:
+            self.clear_eddi_boost_schedule_time()
+
         clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
         if clear_zappi_schedule_time and clear_zappi_schedule_time <= now:
-            self._clear_zappi_schedule_time()
+            self.clear_zappi_schedule_time()
+
+    def _get_clear_eddi_boost_schedule_time(self):
+        """@brief Get the time to clear the eddi boost schedule. If a schedule has been set
+                  then it is cleared when the tank heating has completed.
+           @return A datetime instance or None if not defined."""
+
+        clear_datetime = None
+        try:
+            datetime_str = self._cfg_mgr.getAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME)
+            clear_datetime = datetime.strptime(datetime_str, "%Y-%m-%dT%H:%M:%SZ")
+            self._debug("_get_clear_eddi_boost_schedule_time()")
+        except ValueError:
+            pass
+        return clear_datetime
 
     def _get_clear_zappi_schedule_time(self):
         """@brief Get the time to clear the zappi schedule. If a schedule has been set
@@ -943,7 +1042,19 @@ class GUIServer(object):
             pass
         return clear_datetime
 
-    def _clear_zappi_schedule_time(self):
+    def clear_eddi_boost_schedule_time(self):
+        """@brief Set the clear eddi boost schedule time."""
+        threading.Thread(target=self._clear_eddi_boost_schedule_time_thread).start()
+
+    def _clear_eddi_boost_schedule_time_thread(self):
+        """@brief Set the clear zappi charge schedule time."""
+        self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, "")
+        # Save the time that the zappi schedule should be deleted
+        self._save_config(show_info=False)
+        # Call the method invoked when the user selects the eddi off button
+        threading.Thread(target=self._set_boost, args=(False, None, None)).start()
+
+    def clear_zappi_schedule_time(self):
         """@brief Set the clear zappi charge schedule time."""
         threading.Thread(target=self._clear_zappi_schedule_time_thread).start()
 
@@ -954,7 +1065,7 @@ class GUIServer(object):
         self._save_config(show_info=False)
         # Reset this so that the Set button returns to it's original color.
         self._zappi_charge_schedule_active = False
-        # Call the methodf invoked when the user selects the Clear zappi schedules button
+        # Call the method invoked when the user selects the Clear zappi schedules button
         # to remove the schedules from the zappi.
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
 
@@ -1016,6 +1127,16 @@ class GUIServer(object):
         html.hr()
 
         with ui.row():
+            ui.label('Boost Until').style(GUIServer.TEXT_STYLE_A)
+
+        with ui.row().classes('w-full'):
+            self._bootMinsSlider = ui.slider(min=15, max=240, value=15, step=15)
+            self._bootMinsSlider.on('update:model-value', self._update_boost_time)
+            # We call a method to convert the slider value in minutes to a boost until time.
+            ui.label().bind_text_from(self, '_boost_time_value').style(GUIServer.TEXT_STYLE_B)
+            self._update_boost_time()
+
+        with ui.row():
             ui.label('Boost Control').style(GUIServer.TEXT_STYLE_A)
 
         with ui.row():
@@ -1027,12 +1148,14 @@ class GUIServer(object):
             # We don't add the _boost_stop_button to this list so that we can always issue a stop boost command
             # as the button will never be disabled.
 
-        with ui.row():
-            ui.label('Boost Minutes').style(GUIServer.TEXT_STYLE_A)
-
-        with ui.row().classes('w-full'):
-            self._bootMinsSlider = ui.slider(min=15, max=120, value=30, step=15)
-            ui.label().bind_text_from(self._bootMinsSlider, 'value').style(GUIServer.TEXT_STYLE_B)
+    def _update_boost_time(self):
+        """@brief Called to update the boost until time."""
+        dt = datetime.now().astimezone()
+        dt = dt + timedelta(minutes=self._bootMinsSlider.value)
+        mins_to_add = 15 - (dt.minute % 15)
+        dt = dt + timedelta(minutes=mins_to_add)
+        self._boost_time_value = f"{dt.hour:02d}:{dt.minute:02d}"
+        self._boost_until_datetime = dt.replace(second=0, microsecond=0)
 
     def _enable_buttons(self, enabled):
         for _button in self._buttonList:
@@ -1042,25 +1165,32 @@ class GUIServer(object):
                 _button.disable()
 
     def _top_boost(self):
+        """@brief Turn on the top tank boost"""
+        self._update_boost_time()
         self._eddi_heater_button_selected = 1
         self._enable_buttons(True)
         ui.notify("Setting top boost on.", position='center')
-        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP)).start()
+        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP, self._boost_until_datetime)).start()
         self._reset_polling_rate()
 
     def _bottom_boost(self):
+        """@brief Turn on the bottom tank boost"""
+        self._update_boost_time()
         self._eddi_heater_button_selected = 2
         self._enable_buttons(True)
         ui.notify("Setting bottom boost on.", position='center')
-        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM)).start()
+        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM, self._boost_until_datetime)).start()
         self._reset_polling_rate()
 
     def _stop_boost(self):
+        """@brief disable all tank boost schedules."""
+        self._update_boost_time()
         self._eddi_heater_button_selected = 0
         self._enable_buttons(True)
         ui.notify("Turning off boost.", position='center')
-        threading.Thread(target=self._set_boost, args=(False, None)).start()
+        threading.Thread(target=self._set_boost, args=(False, None, None)).start()
         self._reset_polling_rate()
+        self.clear_eddi_boost_schedule_time()
 
     def _update_gui(self, msg_dict):
         """@brief Send a message to the GUI to update it.
@@ -1069,29 +1199,67 @@ class GUIServer(object):
         msg_dict[GUIServer.GUI_POLL_SECONDS] = time()
         self._to_gui_queue.put(msg_dict)
 
-    def _set_boost(self, on, relay):
+    def _previous_quarter_hour(self, dt):
+        """@brief Get a datetime instance that is aligned with the a quarter hour starting just before the current one."""
+        # Subtract the number of mins
+        spare_mins = dt.minute % 15
+        new_minute = dt.minute - spare_mins
+        rounded_time = dt.replace(minute=new_minute, second=0, microsecond=0)
+        return rounded_time
+
+    def _set_boost(self, on, relay, on_until_time):
         """@brief Called in a separate thread to talk to the eddi unit and set the hot water boost state.
+                  We don't use the boost command because of the way the eddi works in boost mode. If boost
+                  mode is set on and the thermostat in the hot water tank heater disconnects the heater
+                  element the eddi assumes the hot water tank temperature has been reached and the boost
+                  is halted. This may mean the target tank temperature is not reached.
+
+                  The scheduled timers are set to turn on the heater for a predetermined time. If the
+                  thermostat in the hot water tank heater disconnects the heater element then the hot
+                  water stops heating as it should. If, subsequentally, the thermostat reconnects the
+                  heating element and it is still withing the scheduled time then the hot water will
+                  resume heating the water if the tank temperature is yet to be reached.
+
+                  We reserve the 4'th timer for this purpose. 10 minutes after the schedule has
+                  finished the schedule is removed from the schedule list.
+
            @param on If True turn boost on. If False turn boost off on both top and bottom tanks.
            @param relay 1 = top tank relay, 2 = bottom tank relay.
+           @param on_until_time A datetime instance that details when the hot water heating element
+                                should be turned off (if on=True).
            """
-        try:
-            self._my_energi.set_boost(on, self._bootMinsSlider.value, relay=relay)
-            if on:
-                if relay == 1:
-                    retDict = {GUIServer.BOOST_1_ON: True}
-
-                elif relay == 2:
-                    retDict = {GUIServer.BOOST_2_ON: True}
-
-            else:
-                retDict = {GUIServer.BOOST_OFF: True}
-
-            self._update_gui(retDict)
-
-        except Exception as ex:
-            GUIServer.Print_Exception()
+        self._debug("set_boost(on={on}, relay={relay}, on_until_time={on_until_time})")
+        if on:
+            now = datetime.now().astimezone()
+            schedule_start_time = self._previous_quarter_hour(now)
+            schedule_duration = on_until_time - schedule_start_time
+            self._debug("schedule_start_time={schedule_start_time}, schedule_duration  ={schedule_duration}")
+            on_time = on_until_time - now
+            heater_name = "top"
+            if relay == 2:
+                heater_name = "bottom"
+            seconds = on_time.seconds
             msg_dict = {}
-            msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
+            minutes = seconds / 60
+            hours = int(minutes / 60)
+            minutes = int(minutes-(hours*60))
+            msg_dict[GUIServer.INFO_MESSAGE] = f"The {heater_name} tank heater should turn on for {hours:02d}:{minutes:02d}"
+            self._update_gui(msg_dict)
+
+            # Send the schedule to the eddi
+            self._my_energi.set_tank_schedule(on, schedule_start_time, schedule_duration, relay)
+
+            # Set the delete schedule time to be 10 minutes after the tank heating  finishes. 10 minutes was chosen
+            # as I've seen the myenergi system take up to 5 minutes to delete a schedule after sending a
+            # successfull command. We want to have it clear before then next 15 minute slot.
+            clear_schedule_time = on_until_time + timedelta(minutes=10)
+            self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, clear_schedule_time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            self._debug(GUIServer.CLEAR_EDDI_SCHEDULE_TIME + f"={clear_schedule_time}")
+
+        else:
+            self._my_energi.set_water_tank_boost_schedules_off()
+            msg_dict = {}
+            msg_dict[GUIServer.INFO_MESSAGE] = "Set boost schedule off."
             self._update_gui(msg_dict)
 
     def _is_eddi_config_entered(self):
