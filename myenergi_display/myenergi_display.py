@@ -1850,14 +1850,10 @@ class GUIServer(object):
         # If the end charge time is defined then ensure we don't have time after this in the list.
         if end_charge_time:
             now = datetime.now().astimezone()
-            then = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
-            # If this time is in the past
-            if then < now:
-                # Move the hour:min time to next day
-                then = now.replace(day=now.day+1, hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
-                end_charge_datetime = then
-            else:
-                end_charge_datetime = then
+            # Add the HH:MM to the time
+            then = now + timedelta(hours=end_charge_time[0], minutes=end_charge_time[1])
+            then = then.replace(second=0, microsecond=0)
+            end_charge_datetime = then
         return end_charge_datetime
 
     def _get_tariff_data(self, end_charge_time):
