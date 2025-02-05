@@ -989,9 +989,11 @@ class GUIServer(object):
         heater_on = self._get_heater_on()
         if heater_on == 1:
             self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         elif heater_on == 2:
             self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
         else:
             self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
