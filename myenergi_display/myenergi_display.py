@@ -692,6 +692,7 @@ class GUIServer(object):
     TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
+    CLEAR_PLOT = "CLEAR_PLOT"
     MIN_STATS_UPDATE_SECONDS = 10.0                 # The minimum time between myenergi server stats reads.
     MAX_STATS_UPDATE_SECONDS = 60.0                 # The maximum time between myenergi server stats reads.
     STATS_READ_INC_FACTOR = 1.2                     # Choose a factor that will cause the stats read delay to reach maximum in about 6 minutes.
@@ -1114,6 +1115,10 @@ class GUIServer(object):
         elif GUIServer.PLOT_OPTIMAL_CHARGE_TIMES in rxDict:
             argList = rxDict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES]
             self._plot_optimal_charge_times(argList)
+
+        elif GUIServer.CLEAR_PLOT in rxDict:
+            if self._plot_container:
+                self._plot_container.clear()
 
     def _init_eddi_tab(self):
         """@brief Init the tab used for access to EDDI stats and control."""
@@ -1847,15 +1852,23 @@ class GUIServer(object):
     @staticmethod
     def GET_END_CHARGE_DATETIME(end_charge_time):
         """@brief Get the end charge time as a datetime instance.
-           @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed."""
+           @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed or None if no charge time defined."""
         end_charge_datetime = None
         # If the end charge time is defined then ensure we don't have time after this in the list.
         if end_charge_time:
             now = datetime.now().astimezone()
-            # Add the HH:MM to the time
-            then = now + timedelta(hours=end_charge_time[0], minutes=end_charge_time[1])
-            then = then.replace(second=0, microsecond=0)
-            end_charge_datetime = then
+            end_charge_time_today = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+            # If the user entered a time that is earlier today
+            if end_charge_time_today < now:
+                # Assume that the time entered is is tomorrow.
+                end_charge_time_tomorrow = end_charge_time_today + timedelta(days=1)
+                end_charge_datetime = end_charge_time_tomorrow
+            else:
+                now = datetime.now().astimezone()
+                # Add the HH:MM to the time
+                then = now + timedelta(hours=end_charge_time[0], minutes=end_charge_time[1])
+                then = then.replace(second=0, microsecond=0)
+                end_charge_datetime = then
         return end_charge_datetime
 
     def _get_tariff_data(self, end_charge_time):
@@ -2049,6 +2062,10 @@ class GUIServer(object):
 
         except Exception as ex:
             GUIServer.Print_Exception()
+            # As we've had an error clear any displayed plot before letting the user know
+            msg_dict = {}
+            msg_dict[GUIServer.CLEAR_PLOT] = ""
+            self._update_gui(msg_dict)
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
