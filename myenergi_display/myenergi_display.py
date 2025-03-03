@@ -731,6 +731,9 @@ class GUIServer(object):
     ZERO_COST_ELEC_START_TIME = "Start time"
     ZERO_COST_ELEC_DURATION = "Duration"
 
+    MAX_HEATER_WATTS = 2500
+    MIN_HEATER_WATTS = 100
+
     @staticmethod
     def Print_Exception():
         """@brief Print an exception traceback."""
@@ -948,19 +951,23 @@ class GUIServer(object):
                reload=reload,
                show=show)
 
-    def _get_heater_on(self):
-        """@brief Determine if a lod is being drawn by heater 1 or heater 2 (relay 1 or relay 2 on).
-           @return 1 If top relay is on and power is being drawn by the heater.
-                   2 If bottom relay is on and power is being drawn by the heater.
-                   else return 0."""
-        relay_on = 0
-        # We use a 2.5 kW threshold to determine of the heater is on.
-        if self._heater_load_watts > 2500:
-            if self._relay_on == 1:
-                relay_on = 1
-            elif self._relay_on == 2:
-                relay_on = 2
-        return relay_on
+    def _get_heater_power(self, relay):
+        """@brief Determine how much power the heater is taking. This is used to infer
+                  whether the heater is powered from the sun (< MAX power), powered from
+                  AC mains (>= MAX power) or off.
+           @param relay 1 == top tank heater. 2 == Bottom tank heater.
+           @return 2 >= MAX power
+                   1 >= MIN power
+                   0 = No detected power."""
+        detected_power = 0
+        # If the relay of interest is on
+        if self._relay_on == relay:
+            if self._heater_load_watts > GUIServer.MAX_HEATER_WATTS:
+                detected_power = 2
+
+            elif self._heater_load_watts > GUIServer.MIN_HEATER_WATTS:
+                detected_power = 1
+        return detected_power
 
     def _get_zappi_charging(self):
         """@brief Determine if the zappi is charging an EV.
@@ -987,18 +994,15 @@ class GUIServer(object):
             # This stops many threads backing up if there are internet connectivity issues.
             self._read_temp_thread = threading.Thread(target=self._update_stats).start()
 
-        heater_on = self._get_heater_on()
-        if heater_on == 1:
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
-            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+        relay_1_color_index = self._get_heater_power(1)
+        self._boost_top_button.set_color_index(relay_1_color_index)
 
-        elif heater_on == 2:
-            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-
-        else:
-            self._boost_top_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-            self._boost_bottom_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
+        relay_2_color_index = self._get_heater_power(2)
+        # Ensure both heaters cannot be on at the same time
+        # This should never happen.
+        if relay_1_color_index != 0:
+            relay_2_color_index = 0
+        self._boost_bottom_button.set_color_index(relay_2_color_index)
 
         ev_charging = self._get_zappi_charging()
         if ev_charging:
@@ -1149,6 +1153,9 @@ class GUIServer(object):
         with ui.row():
             self._boost_top_button = ColorButton(self._top_boost, 'Top').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
             self._boost_bottom_button = ColorButton(self._bottom_boost, 'Bottom').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            # Set the mid color to yellow when heater is powered from the sun.
+            self._boost_top_button.set_button_colors(["blue", 'yellow', 'green'])
+            self._boost_bottom_button.set_button_colors(["blue", 'yellow', 'green'])
             self._boost_stop_button = ColorButton(self._stop_boost, 'Off').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
             self._buttonList.append(self._boost_top_button)
             self._buttonList.append(self._boost_bottom_button)
