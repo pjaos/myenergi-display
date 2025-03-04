@@ -952,12 +952,11 @@ class GUIServer(object):
                show=show)
 
     def _get_heater_power(self, relay):
-        """@brief Determine how much power the heater is taking. This is used to infer
-                  whether the heater is powered from the sun (< MAX power), powered from
-                  AC mains (>= MAX power) or off.
+        """@brief Determine how much power the heater is taking and from this infer the
+                  source of the power.
            @param relay 1 == top tank heater. 2 == Bottom tank heater.
-           @return 2 >= MAX power
-                   1 >= MIN power
+           @return 2 >= AC Mains
+                   1 >= Solar Power
                    0 = No detected power."""
         detected_power = 0
         # If the relay of interest is on
