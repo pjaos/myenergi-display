@@ -17,6 +17,7 @@ p3lib = "^1.1.100"
 requests = "*"
 nicegui = "*"
 plotly = "*"
+Jinja2 = "^3.1.6"
 
 [tool.poetry.scripts]
 myenergi_display = "myenergi_display.myenergi_display:main"
