@@ -18,6 +18,8 @@ import urllib.request
 import json
 from copy import deepcopy
 
+from p3lib.pconfig import ConfigManager, ConfigAttrDetails
+
 import plotly.graph_objects as go
 
 from p3lib.uio import UIO
@@ -734,6 +736,15 @@ class GUIServer(object):
     MAX_HEATER_WATTS = 2500
     MIN_HEATER_WATTS = 100
 
+    ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT = "ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT"
+    CMD_LINE_CONFIG_FILENAME = "myenergi_display_command_line.cfg"
+    DEFAULT_CMD_LINE_CONFIG = {
+        ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT: "1.0",
+    }
+    CMD_LINE_CONFIG_ATTR_DICT = {
+        ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT: ConfigAttrDetails("Enter the ZAPPI charge adjustment factor (default = 1.0)", 0.0, 3.0),
+    }
+
     @staticmethod
     def Print_Exception():
         """@brief Print an exception traceback."""
@@ -765,6 +776,8 @@ class GUIServer(object):
         self._load_config()
         # Attr used to convert boost time slider seconds into HH:MM
         self._boost_time_value = None
+        self._cmd_line_config_manager = ConfigManager(self._uio, GUIServer.CMD_LINE_CONFIG_FILENAME, GUIServer.DEFAULT_CMD_LINE_CONFIG)
+        self._cmd_line_config_manager.load(self)
 
     def _reset_polling_rate(self):
         """@brief This is called to reset the polling rate (set to min delay between reads)."""
@@ -2120,7 +2133,8 @@ class GUIServer(object):
 
             with self._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
-                kwh = hours_charge_factor*float(self._zappi_max_charge_rate.value)
+                charge_adjustment_factor = self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT)
+                kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value) )
                 current_ev_charge_percentage = self._current_ev_charge_input.value
                 battery_capacity_kwh = self._ev_kwh.value
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
@@ -2247,6 +2261,9 @@ class GUIServer(object):
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
 
+    def command_line_config(self):
+        """@brief Allow the user to configure the command line parameters."""
+        self._cmd_line_config_manager.edit(GUIServer.CMD_LINE_CONFIG_ATTR_DICT)
 
 def main():
     """@brief Program entry point"""
@@ -2257,6 +2274,7 @@ def main():
         parser = argparse.ArgumentParser(description="A program that provides a display interface for myenergi products.",
                                          formatter_class=argparse.RawDescriptionHelpFormatter)
         parser.add_argument("-p", "--port",    type=int, help=f"The TCP server port to which the GUI server is bound to (default={GUIServer.DEFAULT_SERVER_PORT}).", default=GUIServer.DEFAULT_SERVER_PORT)
+        parser.add_argument("-c", "--config",  action='store_true', help="Command line configuration.")
         parser.add_argument("--reload",        action='store_true', help="Reload/Restart GUI when python file is updated. Useful for in dev env.")
         parser.add_argument("--show",          action='store_true', help="Show the GUI (open browser window) on startup.")
         parser.add_argument("-d", "--debug",   action='store_true', help="Enable debugging of the myenergi_display program.")
@@ -2274,9 +2292,14 @@ def main():
         handled = BootManager.HandleOptions(uio, options, options.syslog)
         if not handled:
             gui = GUIServer(uio, options.port)
-            gui.create_gui(options.nicegui_debug,
-                           reload=options.reload,
-                           show=options.show)
+            if options.config:
+                gui.command_line_config()
+
+            else:
+
+                gui.create_gui(options.nicegui_debug,
+                            reload=options.reload,
+                            show=options.show)
 
     # If the program throws a system exit exception
     except SystemExit:
