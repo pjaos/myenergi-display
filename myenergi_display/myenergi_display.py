@@ -2134,7 +2134,7 @@ class GUIServer(object):
             with self._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
                 charge_adjustment_factor = self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT)
-                kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value) )
+                kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value))
                 current_ev_charge_percentage = self._current_ev_charge_input.value
                 battery_capacity_kwh = self._ev_kwh.value
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
@@ -2265,6 +2265,7 @@ class GUIServer(object):
         """@brief Allow the user to configure the command line parameters."""
         self._cmd_line_config_manager.edit(GUIServer.CMD_LINE_CONFIG_ATTR_DICT)
 
+
 def main():
     """@brief Program entry point"""
     uio = UIO()
@@ -2298,8 +2299,8 @@ def main():
             else:
 
                 gui.create_gui(options.nicegui_debug,
-                            reload=options.reload,
-                            show=options.show)
+                               reload=options.reload,
+                               show=options.show)
 
     # If the program throws a system exit exception
     except SystemExit:
