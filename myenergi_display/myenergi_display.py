@@ -1113,7 +1113,7 @@ class GUIServer(object):
             ui.notify(info_message)
             # If we have confirmation from myenergi that the charge schedule was applied
             if info_message == GUIServer.SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE:
-                ui.notify("Wait a few mins before selecting the Get button to check the schedule as the myenergi system can be unreliable.", type='warning', timeout=5000)
+                ui.notify("Wait a few mins before selecting the Get button to check the schedule is set on your ZAPPI.", type='warning', timeout=5000)
                 self._set_zappi_charge_active(True)
             # If we have confirmation from myenergi that all charge schedules were removed
             if info_message == GUIServer.CLEARED_ALL_CHARGING_SCHEDULES:
