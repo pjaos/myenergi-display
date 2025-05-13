@@ -2139,9 +2139,8 @@ class GUIServer(object):
                 current_ev_charge_percentage = self._current_ev_charge_input.value
                 battery_capacity_kwh = self._ev_kwh.value
                 current_battery_kwh = battery_capacity_kwh*(current_ev_charge_percentage/100.0)
-                battery_charged_kwh = current_battery_kwh+kwh
-                battery_charged_percentage = (battery_charged_kwh/battery_capacity_kwh)*100.0
-                # we may be charging slightly longer than is required (duie to 15 min charge increments)
+                battery_charged_percentage = self._target_ev_charge_input.value
+                # we may be charging slightly longer than is required (due to 15 min charge increments)
                 # so limit the max to 100%
                 if battery_charged_percentage > 100.0:
                     battery_charged_percentage = 100.0
