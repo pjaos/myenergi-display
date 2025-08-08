@@ -49,6 +49,12 @@ class MyEnergi(object):
     ZAPPI_CHARGE_MODE_ECO_PLUS = 3
     ZAPPI_CHARGE_MODE_STOPPED = 4
 
+    ZAPPI_STA_EVSE_READY = 1
+    ZAPPI_STA_CONNECTED = 2
+    ZAPPI_STA_CHARGING = 3
+    ZAPPI_STA_WAITING = 4
+    ZAPPI_STA_BOOSTING = 5
+
     def __init__(self, api_key, uio=None):
         """@brief Constuctor
            @param api_key Your myenergi API key.
@@ -177,6 +183,16 @@ class MyEnergi(object):
         """@return Get the current charge rate of the zappi in watts."""
         return self._get_zappi_stat('ectp1')
 
+    def get_zappi_state(self):
+        """@return Get the ZAPPI charge/connected state.
+           ZAPPI_STA_EVSE_READY
+           ZAPPI_STA_CONNECTED
+           ZAPPI_STA_CHARGING
+           ZAPPI_STA_WAITING
+           ZAPPI_STA_BOOSTING
+        """
+        return self._get_zappi_stat('sta')
+
     def get_eddi_stats(self):
         """@brief Get the stats of the eddi unit."""
         self._check_eddi_serial_number()
@@ -271,7 +287,7 @@ class MyEnergi(object):
         return ",".join(day_list)
 
     def get_zappi_stats(self):
-        """@brief Get the stats of the eddi unit."""
+        """@brief Get the stats of the zappi unit."""
         self._check_eddi_serial_number()
         self._check_zappi_serial_number()
         url = MyEnergi.BASE_URL + "cgi-boost-time-Z"+self._zappi_serial_number
@@ -2069,16 +2085,25 @@ class GUIServer(object):
            @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
            @return A dict containing the slots that the car should charge in."""
         try:
-            charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
-                                                                                                                                                 end_charge_time,
-                                                                                                                                                 charge_rate_kw,
-                                                                                                                                                 region_code,
-                                                                                                                                                 free_start_time_hh_mm,
-                                                                                                                                                 free_duration_hh_mm)
+            zappi_state = self._my_energi.get_zappi_state()
+            # PJA: Remove this when PJA confirms that it changes when EV is plugged in.
+            print(f"PJA: ZAPPI state = {zappi_state}")
+            if zappi_state == MyEnergi.ZAPPI_STA_EVSE_READY:
+                msg_dict = {}
+                msg_dict[GUIServer.ERROR_MESSAGE] = "Your EV is not plugged into your ZAPPI charger."
+                self._update_gui(msg_dict)
+                return
+            else:
+                charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
+                                                                                                                                                     end_charge_time,
+                                                                                                                                                     charge_rate_kw,
+                                                                                                                                                     region_code,
+                                                                                                                                                     free_start_time_hh_mm,
+                                                                                                                                                     free_duration_hh_mm)
 
-            msg_dict = {}
-            msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
-            self._update_gui(msg_dict)
+                msg_dict = {}
+                msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
+                self._update_gui(msg_dict)
 
         except Exception as ex:
             GUIServer.Print_Exception()
