@@ -2102,11 +2102,11 @@ class GUIServer(object):
 
             else:
                 charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
-                                                                                                                                                    end_charge_time,
-                                                                                                                                                    charge_rate_kw,
-                                                                                                                                                    region_code,
-                                                                                                                                                    free_start_time_hh_mm,
-                                                                                                                                                    free_duration_hh_mm)
+                                                                                                                                                     end_charge_time,
+                                                                                                                                                     charge_rate_kw,
+                                                                                                                                                     region_code,
+                                                                                                                                                     free_start_time_hh_mm,
+                                                                                                                                                     free_duration_hh_mm)
 
                 msg_dict = {}
                 msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
