@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "myenergi-display"
-version = "0.194"
+version = "0.195"
 description = ""
 authors = ["Paul Austen <pjaos@gmail.com>"]
 readme = "README.md"
@@ -14,11 +14,14 @@ include = [
 python = "^3.10"
 click = "*"
 p3lib = "^1.1.136"
-requests = "*"
+requests = "^2.32.4"
 nicegui = "*"
 plotly = "*"
 Jinja2 = "^3.1.6"
 h11 = "^0.16.0"
+aiohttp = "^3.12.14"
+urllib3 = "^2.5.0"
+starlette = "^0.47.2"
 
 [tool.poetry.scripts]
 myenergi_display = "myenergi_display.myenergi_display:main"
