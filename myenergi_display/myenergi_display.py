@@ -689,6 +689,7 @@ class GUIServer(object):
     READY_BY = "READY_BY"
     CLEAR_ZAPPI_SCHEDULE_TIME = "CLEAR_ZAPPI_SCHEDULE_TIME"
     CLEAR_EDDI_SCHEDULE_TIME = "CLEAR_EDDI_SCHEDULE_TIME"
+    UNDERSHOOT_CHARGE = "UNDERSHOOT_CHARGE"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -702,7 +703,8 @@ class GUIServer(object):
                       TARGET_EV_CHARGE_PERCENTAGE: 80,
                       READY_BY: "",
                       CLEAR_ZAPPI_SCHEDULE_TIME: "",
-                      CLEAR_EDDI_SCHEDULE_TIME: ""}
+                      CLEAR_EDDI_SCHEDULE_TIME: "",
+                      UNDERSHOOT_CHARGE: False}
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
@@ -912,6 +914,7 @@ class GUIServer(object):
         self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_input.value)
         self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_input.value)
         self._cfg_mgr.addAttr(GUIServer.READY_BY, self._end_charge_time_input.value)
+        self._cfg_mgr.addAttr(GUIServer.UNDERSHOOT_CHARGE, self._undershoot_checkbox.value)
 
         self._cfg_mgr.store()
 
@@ -1386,6 +1389,9 @@ class GUIServer(object):
             self._other_tariff_plot_container = ui.element('div')
 
         with ui.row():
+            self._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer than is required to reach the target charge. If checked then the battery may be up to 15 mins under charged.")
+
+        with ui.row():
             self._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
             self._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
 
@@ -1400,6 +1406,7 @@ class GUIServer(object):
         self._octopus_agile_tariff = self._cfg_mgr.getAttr(GUIServer.OCTOPUS_AGILE_TARIFF)
         self._set_octopus_agile_tariff(self._octopus_agile_tariff)
         self._enable_octopus_agile_tariff(self._octopus_agile_tariff)
+        self._undershoot_checkbox.value = self._cfg_mgr.getAttr(GUIServer.UNDERSHOOT_CHARGE)
 
     def _save_config_button_selected(self):
         """@brief Called when the save button is selected by the user in the Setting tab."""
@@ -1874,15 +1881,23 @@ class GUIServer(object):
             remainder = charge_time_mins % 15
             if remainder > 0:
                 charge_time_mins = charge_time_mins - remainder
+                if not self._undershoot_checkbox.value:
+                    # Round up to 15 min intervals. This should mean that the EV charge is least at the required charge level.
+                    # Worst case we charge almost 15 mins longer than is needed to reach the required charge level.
+                    charge_time_mins += 15
 
-        region_code = self._get_region_code()
-        ui.notify("Calculating optimal charge time/s.", position='center', type='ongoing', timeout=1000)
-        threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
-                                                                             charge_time_mins,
-                                                                             float(self._zappi_max_charge_rate.value),
-                                                                             self._get_end_charge_time(),
-                                                                             free_start_time_hh_mm,
-                                                                             free_duration_hh_mm)).start()
+        if charge_time_mins <= 0:
+            ui.notify(f"The charge time is too short to reach a 15 min charge slot.", type='negative')
+
+        else:
+            region_code = self._get_region_code()
+            ui.notify("Calculating optimal charge time/s.", position='center', type='ongoing', timeout=1000)
+            threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
+                                                                                charge_time_mins,
+                                                                                float(self._zappi_max_charge_rate.value),
+                                                                                self._get_end_charge_time(),
+                                                                                free_start_time_hh_mm,
+                                                                                free_duration_hh_mm)).start()
 
     def _get_region_code(self):
         """@brief Get the electricity region code.
