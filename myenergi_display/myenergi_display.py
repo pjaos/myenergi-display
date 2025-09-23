@@ -1389,7 +1389,8 @@ class GUIServer(object):
             self._other_tariff_plot_container = ui.element('div')
 
         with ui.row():
-            self._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer than is required to reach the target charge. If checked then the battery may be up to 15 mins under charged.")
+            self._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer "
+                                                                          "than is required to reach the target charge. If checked then the battery may be up to 15 mins under charged.")
 
         with ui.row():
             self._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
@@ -1887,17 +1888,17 @@ class GUIServer(object):
                     charge_time_mins += 15
 
         if charge_time_mins <= 0:
-            ui.notify(f"The charge time is too short to reach a 15 min charge slot.", type='negative')
+            ui.notify("The charge time is too short to reach a 15 min charge slot.", type='negative')
 
         else:
             region_code = self._get_region_code()
             ui.notify("Calculating optimal charge time/s.", position='center', type='ongoing', timeout=1000)
             threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
-                                                                                charge_time_mins,
-                                                                                float(self._zappi_max_charge_rate.value),
-                                                                                self._get_end_charge_time(),
-                                                                                free_start_time_hh_mm,
-                                                                                free_duration_hh_mm)).start()
+                                                                                 charge_time_mins,
+                                                                                 float(self._zappi_max_charge_rate.value),
+                                                                                 self._get_end_charge_time(),
+                                                                                 free_start_time_hh_mm,
+                                                                                 free_duration_hh_mm)).start()
 
     def _get_region_code(self):
         """@brief Get the electricity region code.
