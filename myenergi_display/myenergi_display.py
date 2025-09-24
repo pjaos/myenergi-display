@@ -535,6 +535,10 @@ class MyEnergi(object):
             url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-"+charge_str
             self._exec_api_cmd(url)
 
+    def get_zappi_ev_charge_kwh(self):
+        """@return Get the EV charge since the car was plugged in."""
+        return self._get_zappi_stat('che')
+
 
 class ColorButton(ui.button):
     """@brief A button that can change it's background color to one of a number of states."""
@@ -731,6 +735,7 @@ class GUIServer(object):
     DEFAULT_BUTTON_COLOR = "blue"
     CLEARED_ALL_CHARGING_SCHEDULES = "Cleared all zappi charging schedules."
     ZAPPI_CHARGE_SCHEDULE = "ZAPPI_CHARGE_SCHEDULE"
+    ZAPPI_CHARGE_COMPLETE_MESSAGE = "ZAPPI_CHARGE_COMPLETE_MESSAGE"
 
     BOOST_TIMES_KEY = "boost_times"
     BDD_BOOST_DICT_KEY = 'bdd'
@@ -798,6 +803,8 @@ class GUIServer(object):
         self._read_temp_thread = None
         self._zappi_charge_schedule_active = False
         self._clear_zappi_button = None
+        self._start_charge_zappi_kwh = 0.0
+        self._target_ev_charge_kwh = 0.0
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
         # Attr used to convert boost time slider seconds into HH:MM
@@ -1059,7 +1066,13 @@ class GUIServer(object):
 
         clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
         if clear_zappi_schedule_time and clear_zappi_schedule_time <= now:
-            self.clear_zappi_schedule_time()
+            # Set the arg to report the zappi charge KWH
+            threading.Thread(target=self._clear_zappi_charge_schedules_thread, args=(True,)).start()
+            self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, "")
+            # Save the time that the zappi schedule should be deleted
+            self._save_config(show_info=False)
+            # Reset this so that the Set button returns to it's original color.
+            self._zappi_charge_schedule_active = False
 
     def _get_clear_eddi_boost_schedule_time(self):
         """@brief Get the time to clear the eddi boost schedule. If a schedule has been set
@@ -1099,10 +1112,6 @@ class GUIServer(object):
         self._save_config(show_info=False)
         # Call the method invoked when the user selects the eddi off button
         threading.Thread(target=self._set_boost, args=(False, None, None)).start()
-
-    def clear_zappi_schedule_time(self):
-        """@brief Set the clear zappi charge schedule time."""
-        threading.Thread(target=self._clear_zappi_schedule_time_thread).start()
 
     def _clear_zappi_schedule_time_thread(self):
         """@brief Set the clear zappi charge schedule time."""
@@ -1163,6 +1172,17 @@ class GUIServer(object):
         elif GUIServer.CLEAR_PLOT in rxDict:
             if self._plot_container:
                 self._plot_container.clear()
+
+        elif GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE in rxDict:
+            charge_complete_msg = rxDict[GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE]
+            self._persistent_notify(charge_complete_msg)
+
+    def _persistent_notify(self, message: str):
+        with ui.dialog() as dialog, ui.card():
+            ui.label(message)
+            with ui.row().classes('w-full justify-center'):
+                ui.button('OK', on_click=dialog.close)
+        dialog.open()
 
     def _init_eddi_tab(self):
         """@brief Init the tab used for access to EDDI stats and control."""
@@ -2092,6 +2112,20 @@ class GUIServer(object):
                 total_charge_mins,
                 cost)
 
+    def _check_ev_plugged_in(self):
+        """@brief Check if EV is plugged in and warn user if not.
+           @return True if EV is plugged in to the ZAPPI charger."""
+        ev_plugged_in = True
+        plug_status = self._my_energi.get_zappi_plug_status()
+        self._debug(f"ZAPPI plug_status = {plug_status}")
+        if plug_status == MyEnergi.ZAPPI_PST_EV_DISCONNECTED:
+            msg_dict = {}
+            msg_dict[GUIServer.ERROR_MESSAGE] = "Your EV is not plugged into your ZAPPI charger."
+            self._update_gui(msg_dict)
+            ev_plugged_in = False
+
+        return ev_plugged_in
+
     def calc_optimal_charge_times_thread(self,
                                          region_code,
                                          charge_mins,
@@ -2109,24 +2143,19 @@ class GUIServer(object):
            @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
            @return A dict containing the slots that the car should charge in."""
         try:
-            plug_status = self._my_energi.get_zappi_plug_status()
-            self._debug(f"ZAPPI plug_status = {plug_status}")
-            if plug_status == MyEnergi.ZAPPI_PST_EV_DISCONNECTED:
-                msg_dict = {}
-                msg_dict[GUIServer.ERROR_MESSAGE] = "Your EV is not plugged into your ZAPPI charger. Correct this and try again."
-                self._update_gui(msg_dict)
+            # Check if the EV is plugged in and warn the user but allow them to proceed with calc
+            self._check_ev_plugged_in()
 
-            else:
-                charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
-                                                                                                                                                     end_charge_time,
-                                                                                                                                                     charge_rate_kw,
-                                                                                                                                                     region_code,
-                                                                                                                                                     free_start_time_hh_mm,
-                                                                                                                                                     free_duration_hh_mm)
+            charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = self._get_charge_details(charge_mins,
+                                                                                                                                                    end_charge_time,
+                                                                                                                                                    charge_rate_kw,
+                                                                                                                                                    region_code,
+                                                                                                                                                    free_start_time_hh_mm,
+                                                                                                                                                    free_duration_hh_mm)
 
-                msg_dict = {}
-                msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
-                self._update_gui(msg_dict)
+            msg_dict = {}
+            msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
+            self._update_gui(msg_dict)
 
         except Exception as ex:
             GUIServer.Print_Exception()
@@ -2184,6 +2213,7 @@ class GUIServer(object):
                 hours_charge_factor = total_charge_mins/60.0
                 charge_adjustment_factor = self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT)
                 kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value))
+                self._target_ev_charge_kwh = kwh
                 battery_charged_percentage = self._target_ev_charge_input.value
                 # we may be charging slightly longer than is required (due to 15 min charge increments)
                 # so limit the max to 100%
@@ -2222,8 +2252,11 @@ class GUIServer(object):
 
     def _set_zappi_charge_thread(self):
         # Sort the dicts in the list on the slot start time. The slot closest in time will be first in the list.
-        # The zappi hargr must be set to eco+ mode to run the charge schedule.
+        # The zappi charger must be set to eco+ mode to run the charge schedule.
         # Check for this and set if required.
+        if not self._check_ev_plugged_in():
+            return
+
         zapp_charge_mode = self._my_energi.get_zappi_charge_mode()
         if zapp_charge_mode != MyEnergi.ZAPPI_CHARGE_MODE_ECO_PLUS:
             self._my_energi.set_zappi_mode_eco_plus()
@@ -2264,6 +2297,8 @@ class GUIServer(object):
             if len(merged_charge_slot_dict_list) == 0:
                 raise Exception("The calculated charge schedule has no duration.")
 
+            self._start_charge_zappi_kwh = self._my_energi.get_zappi_ev_charge_kwh()
+
             self._my_energi.set_zappi_charge_schedule(merged_charge_slot_dict_list)
             msg_dict = {}
             msg_dict[GUIServer.INFO_MESSAGE] = GUIServer.SET_ZAPPI_CHARGE_SCHEDULE_MESSAGE
@@ -2273,7 +2308,7 @@ class GUIServer(object):
             charge_end_time = merged_charge_slot_dict_list[-1][RegionalElectricity.SLOT_STOP_DATETIME]
             # Set the delete schedule time to be 10 minutes after the charge finishes. 10 minutes was chosen
             # as I've seen the myenergi system take up to 5 minutes to delete a schedule after sending a
-            # successfull command. We want to have it clear before then next 15 minute charge slot.
+            # successfull command. We want to have it clear before the next 15 minute charge slot.
             clear_schedule_time = charge_end_time + timedelta(minutes=10)
             self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, clear_schedule_time.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
@@ -2284,7 +2319,9 @@ class GUIServer(object):
             self._update_gui(msg_dict)
 
     def _clear_zappi_charge_schedules(self):
-        """@brief Reset/disable all zappi charge schedules. Called from the GUI thread. This starts the thread that actually does the work."""
+        """@brief Reset/disable all zappi charge schedules.
+                  Called from the GUI thread when the user presses the clear schedules button.
+                  This starts the thread that actually does the work."""
         ui.notify("Clearing all zappi charge schedules", position='center', type='ongoing', timeout=4500)
         self._plot_container.clear()
         self._charge_slot_dict_list = None
@@ -2293,13 +2330,24 @@ class GUIServer(object):
         self._clear_zappi_button.disable()
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
 
-    def _clear_zappi_charge_schedules_thread(self):
-        """@brief Reset/disable all zappi charge schedules. This must be called outside the GUI thread."""
+    def _clear_zappi_charge_schedules_thread(self, send_charged_msg=False):
+        """@brief Reset/disable all zappi charge schedules. This must be called outside the GUI thread.
+           @param send_charged_msg If True send a charged message to the GUI thread to display a
+                  persistent message to the user to show how much charge was added."""
         try:
             self._my_energi.set_all_zappi_schedules_off()
             msg_dict = {}
             msg_dict[GUIServer.INFO_MESSAGE] = GUIServer.CLEARED_ALL_CHARGING_SCHEDULES
             self._update_gui(msg_dict)
+
+            if send_charged_msg:
+                # Send a msg to user detailing the charge completed
+                msg_dict = {}
+                end_charge_zappi_kwh = self._my_energi.get_zappi_ev_charge_kwh()
+                self._zappi_charged_kwh = end_charge_zappi_kwh - self._start_charge_zappi_kwh
+                msg_dict[GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE] = f"EV charge complete. Used {self._zappi_charged_kwh:.2f} kWh. The target was {self._target_ev_charge_kwh:.2f} kWh."
+                self._update_gui(msg_dict)
+
         except Exception as ex:
             GUIServer.Print_Exception()
             msg_dict = {}
