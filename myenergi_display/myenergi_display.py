@@ -724,6 +724,7 @@ class GUIServer(object):
     TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
+    WARNING_MESSAGE = "WARNING_MESSAGE"
     CLEAR_PLOT = "CLEAR_PLOT"
     MIN_STATS_UPDATE_SECONDS = 10.0                 # The minimum time between myenergi server stats reads.
     MAX_STATS_UPDATE_SECONDS = 60.0                 # The maximum time between myenergi server stats reads.
@@ -1176,6 +1177,10 @@ class GUIServer(object):
         elif GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE in rxDict:
             charge_complete_msg = rxDict[GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE]
             self._persistent_notify(charge_complete_msg)
+
+        elif GUIServer.WARNING_MESSAGE in rxDict:
+            warning_message = rxDict[GUIServer.WARNING_MESSAGE]
+            ui.notify(warning_message, type="warning")
 
     def _persistent_notify(self, message: str):
         with ui.dialog() as dialog, ui.card():
@@ -2033,6 +2038,12 @@ class GUIServer(object):
         if self._is_octopus_agile_tariff_enabled():
             regional_electricity = RegionalElectricity(self._uio)
             plot_time_stamp_list, plot_cost_list, end_charge_datetime = regional_electricity.get_prices(region_code, end_charge_time)
+            if len(plot_time_stamp_list) == 0:
+                msg_dict = {}
+                msg_dict[GUIServer.WARNING_MESSAGE] = "Octopus Agile rates are published at 16:00 each day. Wait until after this time and try again."
+                self._update_gui(msg_dict)
+                return None
+
         else:
             plot_time_stamp_list, plot_cost_list = self._get_tariff_data(end_charge_time)
             end_charge_datetime = plot_time_stamp_list[-1]
@@ -2156,6 +2167,10 @@ class GUIServer(object):
             msg_dict = {}
             msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
             self._update_gui(msg_dict)
+
+        except TypeError:
+            # We get here if the Octopus Agile tariff values are not available at the moment.
+            return
 
         except Exception as ex:
             GUIServer.Print_Exception()
