@@ -612,6 +612,22 @@ class RegionalElectricity(object):
 
         return next_dt
 
+    @staticmethod
+    def NEXT_15_MIN_BOUNDARY(dt: datetime) -> datetime:
+        """@brief Round datetime up to the next 15-minute boundary.
+           @param datetime to be rounded up."""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        # Minutes to add to reach next 15 min slot
+        minutes = (15 - dt.minute % 15) % 15
+
+        # If already exactly on a boundary but with seconds, still round up
+        if minutes == 0 and (dt.second > 0 or dt.microsecond > 0):
+            minutes = 15
+
+        return (dt + timedelta(minutes=minutes)).replace(second=0, microsecond=0)
+
     def __init__(self, uio):
         """@brief Constructor
            @param uio A UIO instance."""
@@ -621,7 +637,19 @@ class RegionalElectricity(object):
         """@brief Get a dict of the cost of electricity based on region. See https://mysmartenergy.uk/Electricity-Region for region code list."""
         if region_code not in RegionalElectricity.VALID_REGION_CODE_LIST:
             raise Exception(f'{region_code} is an invalid region code ({",".join(RegionalElectricity.VALID_REGION_CODE_LIST)} are valid).')
-        url_str = f'https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-{region_code}/standard-unit-rates/'
+
+        # Note the link https://api.octopus.energy/v1/products/?search=AGILE lists the currently valid AGILE tariffs.
+        # This is useful if the link below stops working.
+
+        # Get the energy prices for the next 24 hours or as much as we can obtain at this point in the day.
+        now = datetime.now().astimezone()
+        startt = RegionalElectricity.NEXT_15_MIN_BOUNDARY(dt=now)
+        endt = startt + timedelta(hours=24)
+        startts = startt.strftime("%Y-%m-%dT%H:%MZ")
+        endts = endt.strftime("%Y-%m-%dT%H:%MZ")
+        url_str = f'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{region_code}/standard-unit-rates/?period_from={startts}&period_to={endts}'
+        # E.G
+        # https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/?period_from=2025-12-23T00:00Z&period_to=2025-12-23T23:30Z
 
         self._uio.debug(f"Energy cost request URL: {url_str}")
         with urllib.request.urlopen(url_str) as url:
@@ -1469,6 +1497,7 @@ class GUIServer(object):
         else:
             self._add_tariff_value_button.enable()
             self._clear_tariff_value_button.enable()
+            # We only display the other tarrif plot as the agile tariff will change
             self._plot_tariff()
 
     def _add_tariff_value(self):
@@ -2036,6 +2065,14 @@ class GUIServer(object):
                    4: The total charge time in mins.
                    5: The total charge cost"""
         if self._is_octopus_agile_tariff_enabled():
+            # Display a message to the user if they attempt to charge before 16:00
+            now = datetime.now().astimezone()
+            then = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            if now < then:
+                msg_dict = {}
+                msg_dict[GUIServer.WARNING_MESSAGE] = "You may want to wait until shortly after 16:00. Tomorows Agile prices will then be available."
+                self._update_gui(msg_dict)
+
             regional_electricity = RegionalElectricity(self._uio)
             plot_time_stamp_list, plot_cost_list, end_charge_datetime = regional_electricity.get_prices(region_code, end_charge_time)
             if len(plot_time_stamp_list) == 0:

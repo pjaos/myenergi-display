@@ -101,4 +101,5 @@ An example of selecting the CALC button when the Octopus Agile tariff was config
 ### Note
 
 - In some cases (E.G if the weather is very cold) you may find that your EV does not charge at full rate (7.4 or 22 kW) until the battery has warmed up. In such situations you may find the target charge level is not reached using the schedule set.
-- You can always switch to the myenergi mobile app to see the EV charging schedules and update them as you wish using the myenergi app.
+- Once a schdule has been set it is stored in your EV charge schedules. Once set you see the EV charging schedules and update them as you wish using the myenergi app.
+- When the charge is complete the schedule will be deleted.

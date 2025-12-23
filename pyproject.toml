@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "myenergi-display"
-version = "0.197"
+version = "0.198"
 description = ""
 authors = ["Paul Austen <pjaos@gmail.com>"]
 readme = "README.md"
