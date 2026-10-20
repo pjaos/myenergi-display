@@ -754,9 +754,9 @@ class GUIServer(object):
     ERROR_MESSAGE = "ERROR_MESSAGE"
     WARNING_MESSAGE = "WARNING_MESSAGE"
     CLEAR_PLOT = "CLEAR_PLOT"
-    MIN_STATS_UPDATE_SECONDS = 10.0                 # The minimum time between myenergi server stats reads.
-    MAX_STATS_UPDATE_SECONDS = 60.0                 # The maximum time between myenergi server stats reads.
-    STATS_READ_INC_FACTOR = 1.2                     # Choose a factor that will cause the stats read delay to reach maximum in about 6 minutes.
+    MIN_STATS_UPDATE_SECONDS = 30.0                 # The minimum time between myenergi server stats reads.
+    MAX_STATS_UPDATE_SECONDS = 300.0                # The maximum time between myenergi server stats reads.
+    STATS_READ_INC_FACTOR = 1.2                     # A factor used to move from MIN_STATS_UPDATE_SECONDS to MAX_STATS_UPDATE_SECONDS
     DEFAULT_SERVER_PORT = 8080
     GUI_POLL_SECONDS = 0.1
     TARIFF_LIST = ["Octopus Agile Tariff", 'Other Tariff']
