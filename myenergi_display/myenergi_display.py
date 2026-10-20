@@ -545,34 +545,31 @@ class ColorButton(ui.button):
     DEFAULT_COLORS = ["blue", 'purple', 'green']
 
     def __init__(self, callBack=None, *args, **kwargs) -> None:
-        """@brief Constructor.
-                  This sets 3 default colors that the button can be in."""
-        super().__init__(*args, **kwargs)
+        # Must exist before super().__init__() as NiceGUI may call update() during construction
         self._color_index = 0
-        self.set_button_colors(ColorButton.DEFAULT_COLORS)
-        self.on('click', callBack)
+        self._color_list = list(ColorButton.DEFAULT_COLORS)
+        super().__init__(*args, **kwargs)
+        if callBack:
+            self.on('click', callBack)
+        self._apply_color()
 
     def set_button_colors(self, color_list):
-        """@brief Set a list of background colors for the button.
-           @param color_list A list of colors (strings) for each state the button can be in."""
         if len(color_list) < 1:
             raise Exception("The list of button colors must include at least one color.")
         self._color_list = color_list
+        self._color_index = min(self._color_index, len(color_list) - 1)
+        self._apply_color()
 
     def set_color_index(self, color_index):
-        """@brief Set the first of the three button states (low).
-           @param color_index The index of the current color"""
-        max_index = len(self._color_list)-1
-        if self._color_index > max_index:
+        max_index = len(self._color_list) - 1
+        if color_index > max_index:   # original wrongly checked self._color_index
             raise Exception(f"{color_index} is an invalid button color index. The maximum color index is {max_index}.")
-        self._color_index = color_index
-        self.update()
+        if color_index != self._color_index:
+            self._color_index = color_index
+            self._apply_color()
 
-    def update(self) -> None:
-        """@brief Update the button state."""
-        button_color = self._color_list[self._color_index]
-        self.props(f'color={button_color}')
-        super().update()
+    def _apply_color(self):
+        self.props(f'color={self._color_list[self._color_index]}')
 
 
 class RegionalElectricity(object):
@@ -981,23 +978,29 @@ class GUIServer(object):
             self._uio.debug(msg)
 
     def create_gui(self, nicegui_debug_enabled, reload=False, show=False):
-        """@brief Create the GUI elements
+        """@brief Start the GUI server.
            @param nicegui_debug_enabled True enables debug of the nicegui server.
            @param reload If True restart when this file is updated. Useful for dev.
            @param show If True show the GUI on startup, ie open a browser window."""
+        pageTitle = f"myenergi display (V{TabbedNiceGui.GetProgramVersion()})"
+        guiLogLevel = "debug" if nicegui_debug_enabled else "warning"
+        ui.run(root=self._build_page,
+               host="0.0.0.0",
+               port=self._port,
+               title=pageTitle,
+               dark=True,
+               uvicorn_logging_level=guiLogLevel,
+               reload=reload,
+               show=show)
+
+    def _build_page(self):
+        """@brief Build the GUI elements. Called by NiceGUI for each browser connection."""
         self._temp1 = 60
         self._temp2 = 40
         self._buttonList = []
 
-        pageTitle = f"myenergi display (V{TabbedNiceGui.GetProgramVersion()})"
-        address = "0.0.0.0"
-        tabNameList = ('EDDI',
-                       'ZAPPI',
-                       'SETTINGS')
-        iconList = ('home',
-                    'electric_car',
-                    'settings')
-        # This must have the same number of elements as the above list
+        tabNameList = ('EDDI', 'ZAPPI', 'SETTINGS')
+        iconList = ('home', 'electric_car', 'settings')
         tabMethodInitList = [self._init_eddi_tab,
                              self._init_zappi_tab,
                              self._init_settings_tab]
@@ -1005,27 +1008,14 @@ class GUIServer(object):
         with ui.row().style(GUIServer.TAB_BAR_STYLE):
             with ui.tabs().classes('w-full') as tabs:
                 for tabName, iconName in zip(tabNameList, iconList):
-                    tabObj = ui.tab(tabName, icon=iconName)
-                    tabObjList.append(tabObj)
+                    tabObjList.append(ui.tab(tabName, icon=iconName))
 
             with ui.tab_panels(tabs, value=tabObjList[0]).classes('w-full'):
-                for tabObj in tabObjList:
+                for tabObj, init_method in zip(tabObjList, tabMethodInitList):
                     with ui.tab_panel(tabObj):
-                        tabIndex = tabObjList.index(tabObj)
-                        tabMethodInitList[tabIndex]()
+                        init_method()
 
-        guiLogLevel = "warning"
-        if nicegui_debug_enabled:
-            guiLogLevel = "debug"
-
-        ui.timer(interval=0.1, callback=self._gui_timer_callback)
-        ui.run(host=address,
-               port=self._port,
-               title=pageTitle,
-               dark=True,
-               uvicorn_logging_level=guiLogLevel,
-               reload=reload,
-               show=show)
+        ui.timer(interval=GUIServer.GUI_POLL_SECONDS, callback=self._gui_timer_callback)
 
     def _get_heater_power(self, relay):
         """@brief Determine how much power the heater is taking and from this infer the
