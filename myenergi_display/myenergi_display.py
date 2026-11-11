@@ -30,7 +30,7 @@ from p3lib.pconfig import DotConfigManager
 from p3lib.boot_manager import BootManager
 from p3lib.ngt import TabbedNiceGui, YesNoDialog
 
-from nicegui import ui, html, app
+from nicegui import ui, html, app, run
 
 
 class MyEnergi(object):
@@ -39,7 +39,10 @@ class MyEnergi(object):
               It provides the functionality required by this application."""
     TANK_TOP = 1
     TANK_BOTTOM = 2
-    BASE_URL = 'https://s18.myenergi.net/'
+    DIRECTOR_URL = 'https://director.myenergi.net/'
+    FALLBACK_BASE_URL = 'https://s18.myenergi.net/'     # Used if the director does not tell us which server to use
+    ASN_HEADER = 'X_MYENERGI-asn'                       # Header in which the director returns the server name
+    REQUEST_TIMEOUT_SECONDS = 30
     TOP_TANK_ID = 1
     BOTTOM_TANK_ID = 2
     TANK_1_BOOST_SCHEDULE_SLOT_ID = 14
@@ -77,6 +80,7 @@ class MyEnergi(object):
         self._zappi_stats_dict = None
         self._uio = uio
         self._lock = threading.Lock()
+        self._base_url = None           # The myenergi server for this account. Found on first use.
 
     def set_eddi_serial_number(self, eddi_serial_number):
         """@brief set the eddi serial number.
@@ -101,7 +105,7 @@ class MyEnergi(object):
     def get_stats(self):
         """@brief Get the stats of the eddi unit."""
         self._check_eddi_serial_number()
-        url = MyEnergi.BASE_URL + "cgi-jstatus-*"
+        url = "cgi-jstatus-*"
         return self._exec_api_cmd(url)
 
     def update_stats(self):
@@ -206,7 +210,7 @@ class MyEnergi(object):
     def get_eddi_stats(self):
         """@brief Get the stats of the eddi unit."""
         self._check_eddi_serial_number()
-        url = MyEnergi.BASE_URL + "cgi-jstatus-E"
+        url = "cgi-jstatus-E"
         return self._exec_api_cmd(url)
 
     def get_zappi_schedule_list(self):
@@ -300,7 +304,7 @@ class MyEnergi(object):
         """@brief Get the stats of the zappi unit."""
         self._check_eddi_serial_number()
         self._check_zappi_serial_number()
-        url = MyEnergi.BASE_URL + "cgi-boost-time-Z"+self._zappi_serial_number
+        url = "cgi-boost-time-Z"+self._zappi_serial_number
         return self._exec_api_cmd(url)
 
     def set_boost(self, on, mins, relay=None):
@@ -314,12 +318,12 @@ class MyEnergi(object):
         if on:
             if relay not in (1, 2):
                 raise Exception("BUG: set_boost() switch must be 1 or 2.")
-            url = MyEnergi.BASE_URL + "cgi-eddi-boost-E"+self._eddi_serial_number+f"-10-{relay}-{mins}"
+            url = "cgi-eddi-boost-E"+self._eddi_serial_number+f"-10-{relay}-{mins}"
         else:
-            url = MyEnergi.BASE_URL + "cgi-eddi-boost-E"+self._eddi_serial_number+"-1-1-0"
+            url = "cgi-eddi-boost-E"+self._eddi_serial_number+"-1-1-0"
             self._exec_api_cmd(url)
 
-            url = MyEnergi.BASE_URL + "cgi-eddi-boost-E"+self._eddi_serial_number+"-1-2-0"
+            url = "cgi-eddi-boost-E"+self._eddi_serial_number+"-1-2-0"
 
         self._exec_api_cmd(url)
 
@@ -330,7 +334,7 @@ class MyEnergi(object):
            @param duration_timedelta A timedelta instance that defines ho long the tank heater should stay on.
            @param tank The hot water tank (1=top, 2 = bottom)."""
         sched_sub_str = self._get_eddi_schedule_string(on, on_datetime, duration_timedelta, tank)
-        url = MyEnergi.BASE_URL + f"cgi-boost-time-E{self._eddi_serial_number}-{sched_sub_str}"
+        url = f"cgi-boost-time-E{self._eddi_serial_number}-{sched_sub_str}"
         self._exec_api_cmd(url)
 
     def set_water_tank_boost_schedules_off(self):
@@ -389,7 +393,7 @@ class MyEnergi(object):
         self._check_zappi_serial_number()
 
         for slot_id in MyEnergi.VALID_ZAPPI_SLOT_ID_LIST:
-            url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-{slot_id}-0000-000-00000000"
+            url = f"cgi-boost-time-Z{self._zappi_serial_number}-{slot_id}-0000-000-00000000"
             self._exec_api_cmd(url)
             # The myenergi system does not always delete the schedule unless a delay occurs between each command
             sleep(1)
@@ -421,9 +425,9 @@ class MyEnergi(object):
         duration_minutes, _ = divmod(remainder, 60)
         day_of_week = start_datetime.weekday()  # where Monday is 0 and Sunday is 6
 
-        # We cannot charge for more than 8 hours 59 mins
-        if duration_hours > 9:
-            raise Exception("The charge time must be less than 9 hours.")
+        # We cannot charge for more than 8 hours 59 mins in one schedule
+        if duration_timedelta > timedelta(hours=8, minutes=59):
+            raise Exception("A single zappi charge schedule must be less than 9 hours.")
 
         on_time_string = f"{start_datetime.hour:02d}{start_datetime.minute:02d}"
         duration_string = f"{duration_hours:01d}{duration_minutes:02d}"
@@ -467,15 +471,49 @@ class MyEnergi(object):
         if self._uio:
             self._uio.debug(f"myenergi API DEBUG: {msg}")
 
-    def _exec_api_cmd(self, url):
+    def _get_base_url(self):
+        """@brief Get the URL of the myenergi server that holds this account.
+                  The myenergi director server returns the server to use in a response header.
+                  This avoids a hard coded server that would stop working if myenergi move the account.
+                  Must be called with self._lock held.
+           @return The base URL (ends with /)."""
+        if self._base_url is None:
+            base_url = MyEnergi.FALLBACK_BASE_URL
+            try:
+                response = requests.get(MyEnergi.DIRECTOR_URL + "cgi-jstatus-E",
+                                        auth=HTTPDigestAuth(self._eddi_serial_number, self._api_key),
+                                        timeout=MyEnergi.REQUEST_TIMEOUT_SECONDS)
+                asn = response.headers.get(MyEnergi.ASN_HEADER)
+                if asn and asn != "undefined":
+                    base_url = f"https://{asn}/"
+                    # Only cache a server name we were actually given so a failed lookup is retried.
+                    self._base_url = base_url
+                self._debug(f"myenergi director: status={response.status_code}, {MyEnergi.ASN_HEADER}={asn}")
+            except requests.RequestException as ex:
+                self._debug(f"myenergi director lookup failed ({str(ex)}), using {base_url}")
+            return base_url
+        return self._base_url
+
+    def _exec_api_cmd(self, path):
         """@brief Run a command using the myenergi api and check for errors.
+           @param path The API command (the part of the URL after the server name).
            @return The json response message."""
         # As this maybe called from multiple threads ensure we use acquire a thread lock each time
         # we communicate with the myenergi server.
         with self._lock:
+            url = self._get_base_url() + path
             self._debug(f"_exec_api_cmd: url={url}")
-            response = requests.get(url, auth=HTTPDigestAuth(self._eddi_serial_number, self._api_key))
+            try:
+                # A timeout ensures a thread can't hang forever if the network or server stops responding.
+                response = requests.get(url,
+                                        auth=HTTPDigestAuth(self._eddi_serial_number, self._api_key),
+                                        timeout=MyEnergi.REQUEST_TIMEOUT_SECONDS)
+            except requests.RequestException:
+                # The account may have moved server. Look it up again next time.
+                self._base_url = None
+                raise
             if response.status_code != 200:
+                self._base_url = None
                 raise Exception(f"{response.status_code} error code returned from myenergi server.")
             self._debug(f"_exec_api_cmd: response.status_code={response.status_code}")
             response_dict = response.json()
@@ -494,22 +532,22 @@ class MyEnergi(object):
 
     def set_zappi_mode_fast_charge(self):
         """@brief Set the mode of the zappi charger to fast charge."""
-        url = MyEnergi.BASE_URL + f"cgi-zappi-mode-Z{self._zappi_serial_number}-1-0-0-0000"
+        url = f"cgi-zappi-mode-Z{self._zappi_serial_number}-1-0-0-0000"
         self._exec_api_cmd(url)
 
     def set_zappi_mode_eco(self):
         """@brief Set the mode of the zappi charger to eco"""
-        url = MyEnergi.BASE_URL + f"cgi-zappi-mode-Z{self._zappi_serial_number}-2-0-0-0000"
+        url = f"cgi-zappi-mode-Z{self._zappi_serial_number}-2-0-0-0000"
         self._exec_api_cmd(url)
 
     def set_zappi_mode_eco_plus(self):
         """@brief Set the mode of the zappi charger to eco+"""
-        url = MyEnergi.BASE_URL + f"cgi-zappi-mode-Z{self._zappi_serial_number}-3-0-0-0000"
+        url = f"cgi-zappi-mode-Z{self._zappi_serial_number}-3-0-0-0000"
         self._exec_api_cmd(url)
 
     def set_zappi_mode_stop(self):
         """@brief Set the mode of the zappi charger to stop"""
-        url = MyEnergi.BASE_URL + f"cgi-zappi-mode-Z{self._zappi_serial_number}-4-0-0-0000"
+        url = f"cgi-zappi-mode-Z{self._zappi_serial_number}-4-0-0-0000"
         self._exec_api_cmd(url)
 
     def set_zappi_charge_schedule(self, charge_slot_dict_list):
@@ -534,7 +572,7 @@ class MyEnergi(object):
 
         # Set each schedule.
         for charge_str in charge_str_list:
-            url = MyEnergi.BASE_URL + f"cgi-boost-time-Z{self._zappi_serial_number}-"+charge_str
+            url = f"cgi-boost-time-Z{self._zappi_serial_number}-"+charge_str
             self._exec_api_cmd(url)
 
     def get_zappi_ev_charge_kwh(self):
@@ -686,8 +724,8 @@ class RegionalElectricity(object):
             # Ignore all times that are in the past
             if ts < next_30_min_datetime:
                 continue
-            # Ignore times after the end charge time
-            if end_charge_datetime and ts > end_charge_datetime:
+            # Ignore slots that would finish after the end charge time
+            if end_charge_datetime and ts + timedelta(minutes=30) > end_charge_datetime:
                 continue
             timeStampList.append(ts)
             cost = costDict[ts]/100.0
@@ -841,6 +879,50 @@ class TankTempHistory(object):
         self._rewrite_file()
 
 
+class ClientView(object):
+    """@brief Holds the GUI elements for one browser connection.
+              Each browser (E.G a phone and a PC) gets its own set so they don't interfere with each other.
+              Messages from the worker threads are sent to every connected browser."""
+
+    def __init__(self):
+        self._add_free_elect_period_dialog = None
+        self._add_tariff_dialog = None
+        self._add_tariff_value_button = None
+        self._api_key = None
+        self._boost_bottom_button = None
+        self._boost_stop_button = None
+        self._boost_time_value = None
+        self._boost_top_button = None
+        self._boost_until_datetime = None
+        self._bootMinsSlider = None
+        self._bottomTankTempLabel = None
+        self._calc_button = None
+        self._clear_tariff_value_button = None
+        self._clear_zappi_button = None
+        self._config_save_button = None
+        self._current_ev_charge_input = None
+        self._eddi_serial_number = None
+        self._electricity_region_code = None
+        self._end_charge_time_input = None
+        self._ev_kwh = None
+        self._free_energy_checkbox = None
+        self._get_button = None
+        self._heater_shade_checkbox = None
+        self._other_tariff_plot_container = None
+        self._plot_container = None
+        self._set_button = None
+        self._target_ev_charge_input = None
+        self._tariff_radio = None
+        self._temp_period_select = None
+        self._temp_plot_container = None
+        self._topTankTempLabel = None
+        self._undershoot_checkbox = None
+        self._zappi_max_charge_rate = None
+        self._zappi_serial_number = None
+        self._buttonList = []
+        self.queue = Queue()
+
+
 class GUIServer(object):
 
     MYENERGI_API_KEY = 'MYENERGI_API_KEY'
@@ -963,6 +1045,7 @@ class GUIServer(object):
                          "7 days": 168}
     DEFAULT_TEMP_PLOT_PERIOD = "24 hours"
     TEMP_PLOT_AUTO_REFRESH_SECONDS = 60
+    HOUSEKEEPING_SECONDS = 10
 
     @staticmethod
     def Print_Exception():
@@ -978,34 +1061,29 @@ class GUIServer(object):
         self._uio = uio
         self._port = port
         self._init_stats_read_delay = True            # A flag to initialize the stats read time
-        self._to_gui_queue = Queue()    # This queue is used to send commands from any thread to the GUI thread.
         self._my_energi = MyEnergi('')
         self._heater_load_watts = 0
         self._zappi_charge_watts = 0
         self._relay_on = 0
         self._eddi_heater_button_selected = 0
-        self._electricity_region_code = ''
         self._charge_slot_dict_list = None
         self._octopus_agile_tariff = True
         self._other_tariff_values = []
         self._read_temp_thread = None
         self._zappi_charge_schedule_active = False
-        self._clear_zappi_button = None
         self._start_charge_zappi_kwh = 0.0
         self._target_ev_charge_kwh = 0.0
         self._cfg_mgr = DotConfigManager(GUIServer.DEFAULT_CONFIG, uio=self._uio)
         self._load_config()
-        # Attr used to convert boost time slider seconds into HH:MM
-        self._boost_time_value = None
         self._cmd_line_config_manager = ConfigManager(self._uio, GUIServer.CMD_LINE_CONFIG_FILENAME, GUIServer.DEFAULT_CMD_LINE_CONFIG)
         self._cmd_line_config_manager.load(self)
 
         # Tank temperature recording
-        self._temp_plot_container = None
-        self._temp_period_select = None
-        self._heater_shade_checkbox = None
-        self._temp_recorder_stop_event = threading.Event()
-        self._temp_recorder_thread = None
+        self._background_stop_event = threading.Event()
+        self._background_threads = []
+        self._cfg_lock = threading.Lock()
+        # Each browser connection has its own widgets (ClientView instance), keyed by NiceGUI client id.
+        self._client_views = {}
         history_days = self._get_cmd_line_int(GUIServer.TANK_TEMP_HISTORY_DAYS_INT, GUIServer.DEFAULT_TANK_TEMP_HISTORY_DAYS)
         history_file = os.path.join(DotConfigManager.GetDefaultConfigFolder(), GUIServer.TANK_TEMP_HISTORY_FILENAME)
         self._tank_temp_history = TankTempHistory(history_file, history_days*24, uio=self._uio)
@@ -1071,66 +1149,77 @@ class GUIServer(object):
         self._my_energi.set_eddi_serial_number(self._cfg_mgr.getAttr(GUIServer.EDDI_SERIAL_NUMBER))
         self._my_energi.set_zappi_serial_number(self._cfg_mgr.getAttr(GUIServer.ZAPPI_SERIAL_NUMBER))
 
-    def _save_config(self, show_info=True):
-        """@brief Save some parameters to a local config file.
-           @param show_info If True then show info messages."""
+    def _save_charge_fields(self):
+        """@brief Save the ZAPPI tab charge fields so they are restored next time. No network access."""
+        self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._w._current_ev_charge_input.value)
+        self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._w._target_ev_charge_input.value)
+        self._cfg_mgr.addAttr(GUIServer.READY_BY, self._w._end_charge_time_input.value)
+        self._cfg_mgr.addAttr(GUIServer.UNDERSHOOT_CHARGE, self._w._undershoot_checkbox.value)
+        self._store_config()
 
-        # If the API key and eddi serial number have been entered
-        if len(self._api_key.value) > 0 and len(self._eddi_serial_number.value) > 0:
-            self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY,    self._api_key.value)
-            self._cfg_mgr.addAttr(GUIServer.EDDI_SERIAL_NUMBER,  self._eddi_serial_number.value)
-            if not self._check_eddi_access_ok(show_info=show_info):
-                return
+    async def _save_settings(self):
+        """@brief Validate and save the settings tab. Access to the myenergi units is checked in
+                  a separate thread so the GUI does not freeze while waiting for the server.
+           @return True if saved."""
+        api_key = self._w._api_key.value or ""
+        eddi_serial_number = self._w._eddi_serial_number.value or ""
+        zappi_serial_number = self._w._zappi_serial_number.value or ""
+        zappi_max_charge_rate = self._w._zappi_max_charge_rate.value or ""
+        ev_kwh = self._w._ev_kwh.value
+        region_code = self._w._electricity_region_code.value
+        octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
 
-        # If the API key and zappi serial number have been entered
-        if len(self._api_key.value) > 0 and len(self._zappi_serial_number.value) > 0:
-            self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY,    self._api_key.value)
-            self._cfg_mgr.addAttr(GUIServer.ZAPPI_SERIAL_NUMBER, self._zappi_serial_number.value)
-            if not self._check_zappi_access_ok(show_info=show_info):
-                ui.notify("zappi access failed. Check API Key and zappi serial number.", type='negative')
-                return
-
-            if float(self._ev_kwh.value) <= 0:
+        # Check the fields that don't need network access first.
+        if len(api_key) > 0 and len(zappi_serial_number) > 0:
+            if float(ev_kwh or 0) <= 0:
                 ui.notify("EV battery capacity must be greater than 0 kWh.", type='negative')
-                return
-            self._cfg_mgr.addAttr(GUIServer.EV_BATTERY_KWH, float(self._ev_kwh.value))
+                return False
 
-            region_code = self._electricity_region_code.value
             if region_code is None or region_code not in RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS:
                 ui.notify("Electricity region code must be set.", type='negative')
-                return
-            self._cfg_mgr.addAttr(GUIServer.ELECTRICITY_REGION_CODE, region_code)
+                return False
 
             # The user may leave the zappi charge rate field empty
-            if len(self._zappi_max_charge_rate.value) > 0:
+            if len(zappi_max_charge_rate) > 0:
                 try:
-                    float(self._zappi_max_charge_rate.value)
+                    float(zappi_max_charge_rate)
                 except ValueError:
-                    ui.notify(f"{self._zappi_max_charge_rate.value} is an invalid zappi charge rate (kW).", type='negative')
-                    # Don't proceed with saving
-                    return
-            self._cfg_mgr.addAttr(GUIServer.ZAPPI_MAX_CHARGE_RATE, self._zappi_max_charge_rate.value)
+                    ui.notify(f"{zappi_max_charge_rate} is an invalid zappi charge rate (kW).", type='negative')
+                    return False
 
-            octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
+        if len(api_key) > 0 and len(eddi_serial_number) > 0:
+            error = await run.io_bound(GUIServer.CHECK_EDDI_ACCESS, api_key, eddi_serial_number)
+            if error:
+                ui.notify(f"eddi: {error}", type='negative')
+                return False
+            ui.notify("Successfully read eddi stats.", position='center')
+            self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY, api_key)
+            self._cfg_mgr.addAttr(GUIServer.EDDI_SERIAL_NUMBER, eddi_serial_number)
+
+        if len(api_key) > 0 and len(zappi_serial_number) > 0:
+            error = await run.io_bound(GUIServer.CHECK_ZAPPI_ACCESS, api_key, eddi_serial_number, zappi_serial_number)
+            if error:
+                ui.notify(f"zappi: {error}", type='negative')
+                ui.notify("zappi access failed. Check API Key and zappi serial number.", type='negative')
+                return False
+            ui.notify("Successfully read zappi stats.", position='center')
+            self._cfg_mgr.addAttr(GUIServer.MYENERGI_API_KEY, api_key)
+            self._cfg_mgr.addAttr(GUIServer.ZAPPI_SERIAL_NUMBER, zappi_serial_number)
+            self._cfg_mgr.addAttr(GUIServer.EV_BATTERY_KWH, float(ev_kwh))
+            self._cfg_mgr.addAttr(GUIServer.ELECTRICITY_REGION_CODE, region_code)
+            self._cfg_mgr.addAttr(GUIServer.ZAPPI_MAX_CHARGE_RATE, zappi_max_charge_rate)
             self._cfg_mgr.addAttr(GUIServer.OCTOPUS_AGILE_TARIFF, octopus_agile_tariff)
             self._cfg_mgr.addAttr(GUIServer.TARIFF_POINT_LIST, self._other_tariff_values)
 
-        # These are GUI fields that are saved persistently.
-        self._cfg_mgr.addAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE, self._current_ev_charge_input.value)
-        self._cfg_mgr.addAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE, self._target_ev_charge_input.value)
-        self._cfg_mgr.addAttr(GUIServer.READY_BY, self._end_charge_time_input.value)
-        self._cfg_mgr.addAttr(GUIServer.UNDERSHOOT_CHARGE, self._undershoot_checkbox.value)
-
-        self._cfg_mgr.store()
-
-        if show_info:
-            ui.notify(f"Saved to {self._cfg_mgr._getConfigFile()}")
+        self._save_charge_fields()
+        ui.notify(f"Saved to {self._cfg_mgr._getConfigFile()}")
+        return True
 
     def _is_octopus_agile_tariff_enabled(self):
         """@brief Determine if the user has selectedt the Octopus agile tariff.
            @return True if enabled false if not."""
         octopus_agile_tariff = False
-        if self._tariff_radio.value == GUIServer.TARIFF_LIST[0]:
+        if self._w._tariff_radio.value == GUIServer.TARIFF_LIST[0]:
             octopus_agile_tariff = True
         return octopus_agile_tariff
 
@@ -1158,8 +1247,8 @@ class GUIServer(object):
         guiLogLevel = "debug" if nicegui_debug_enabled else "warning"
         # Start/stop the tank temperature recorder with the server. Using the startup hook (rather than
         # starting a thread here) ensures only one recorder runs when --reload is used.
-        app.on_startup(self._start_tank_temp_recorder)
-        app.on_shutdown(self._stop_tank_temp_recorder)
+        app.on_startup(self._start_background_threads)
+        app.on_shutdown(self._stop_background_threads)
         ui.run(root=self._build_page,
                host="0.0.0.0",
                port=self._port,
@@ -1169,11 +1258,17 @@ class GUIServer(object):
                reload=reload,
                show=show)
 
+    @property
+    def _w(self):
+        """@return The ClientView (widgets) of the browser connection whose event is being handled."""
+        return self._client_views[ui.context.client.id]
+
     def _build_page(self):
         """@brief Build the GUI elements. Called by NiceGUI for each browser connection."""
-        self._temp1 = 60
-        self._temp2 = 40
-        self._buttonList = []
+        client = ui.context.client
+        self._client_views[client.id] = ClientView()
+        # Forget this browser's widgets when it goes away.
+        client.on_delete(lambda: self._client_views.pop(client.id, None))
 
         tabNameList = ('EDDI', 'TEMPS', 'ZAPPI', 'SETTINGS')
         iconList = ('home', 'thermostat', 'electric_car', 'settings')
@@ -1232,8 +1327,8 @@ class GUIServer(object):
     def _gui_timer_callback(self):
         """@called periodically (quickly) to allow updates of the GUI."""
 
-        while not self._to_gui_queue.empty():
-            rxMessage = self._to_gui_queue.get()
+        while not self._w.queue.empty():
+            rxMessage = self._w.queue.get()
             if isinstance(rxMessage, dict):
                 self._process_rx_dict(rxMessage)
 
@@ -1243,41 +1338,28 @@ class GUIServer(object):
             # if there are issues getting data over the internet.
             # Only start a new thread if we haven't started one yet or the old one has completed.
             # This stops many threads backing up if there are internet connectivity issues.
-            self._read_temp_thread = threading.Thread(target=self._update_stats).start()
+            if self._read_temp_thread is None or not self._read_temp_thread.is_alive():
+                self._read_temp_thread = threading.Thread(target=self._update_stats, daemon=True)
+                self._read_temp_thread.start()
 
         relay_1_color_index = self._get_heater_power(1)
-        self._boost_top_button.set_color_index(relay_1_color_index)
+        self._w._boost_top_button.set_color_index(relay_1_color_index)
 
         relay_2_color_index = self._get_heater_power(2)
         # Ensure both heaters cannot be on at the same time
         # This should never happen.
         if relay_1_color_index != 0:
             relay_2_color_index = 0
-        self._boost_bottom_button.set_color_index(relay_2_color_index)
+        self._w._boost_bottom_button.set_color_index(relay_2_color_index)
 
         ev_charging = self._get_zappi_charging()
         if ev_charging:
-            self._set_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
+            self._w._set_button.set_color_index(GUIServer.BUTTON_HIGH_INDEX)
         else:
             if self._zappi_charge_schedule_active:
-                self._set_button.set_color_index(GUIServer.BUTTON_MID_INDEX)
+                self._w._set_button.set_color_index(GUIServer.BUTTON_MID_INDEX)
             else:
-                self._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
-
-        now = datetime.now()
-        clear_eddi_boost_schedule_time = self._get_clear_eddi_boost_schedule_time()
-        if clear_eddi_boost_schedule_time and clear_eddi_boost_schedule_time <= now:
-            self.clear_eddi_boost_schedule_time()
-
-        clear_zappi_schedule_time = self._get_clear_zappi_schedule_time()
-        if clear_zappi_schedule_time and clear_zappi_schedule_time <= now:
-            # Set the arg to report the zappi charge KWH
-            threading.Thread(target=self._clear_zappi_charge_schedules_thread, args=(True,)).start()
-            self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, "")
-            # Save the time that the zappi schedule should be deleted
-            self._save_config(show_info=False)
-            # Reset this so that the Set button returns to it's original color.
-            self._zappi_charge_schedule_active = False
+                self._w._set_button.set_color_index(GUIServer.BUTTON_LOW_INDEX)
 
     def _get_clear_eddi_boost_schedule_time(self):
         """@brief Get the time to clear the eddi boost schedule. If a schedule has been set
@@ -1288,7 +1370,6 @@ class GUIServer(object):
         try:
             datetime_str = self._cfg_mgr.getAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME)
             clear_datetime = datetime.strptime(datetime_str, "%Y-%m-%dT%H:%M:%SZ")
-            self._debug("_get_clear_eddi_boost_schedule_time()")
         except ValueError:
             pass
         return clear_datetime
@@ -1306,45 +1387,54 @@ class GUIServer(object):
             pass
         return clear_datetime
 
-    def clear_eddi_boost_schedule_time(self):
-        """@brief Set the clear eddi boost schedule time."""
-        threading.Thread(target=self._clear_eddi_boost_schedule_time_thread).start()
+    def _store_config(self):
+        """@brief Save the config to file. Safe to call from any thread."""
+        with self._cfg_lock:
+            self._cfg_mgr.store()
 
-    def _clear_eddi_boost_schedule_time_thread(self):
-        """@brief Set the clear zappi charge schedule time."""
-        self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, "")
-        # Save the time that the zappi schedule should be deleted
-        self._save_config(show_info=False)
-        # Call the method invoked when the user selects the eddi off button
-        threading.Thread(target=self._set_boost, args=(False, None, None)).start()
+    def _housekeeping_thread(self):
+        """@brief Remove the eddi boost and zappi charge schedules once they have finished.
+                  This runs in the background so schedules are removed even when no browser is
+                  connected. Otherwise they would repeat on the same day next week."""
+        while not self._background_stop_event.is_set():
+            try:
+                now = datetime.now()
+                clear_eddi_time = self._get_clear_eddi_boost_schedule_time()
+                if clear_eddi_time and clear_eddi_time <= now:
+                    self._info("Removing the finished eddi boost schedule.")
+                    self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, "")
+                    self._store_config()
+                    self._set_boost(False, None, None)
 
-    def _clear_zappi_schedule_time_thread(self):
-        """@brief Set the clear zappi charge schedule time."""
-        self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, "")
-        # Save the time that the zappi schedule should be deleted
-        self._save_config(show_info=False)
-        # Reset this so that the Set button returns to it's original color.
-        self._zappi_charge_schedule_active = False
-        # Call the method invoked when the user selects the Clear zappi schedules button
-        # to remove the schedules from the zappi.
-        threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
+                clear_zappi_time = self._get_clear_zappi_schedule_time()
+                if clear_zappi_time and clear_zappi_time <= now:
+                    self._info("Removing the finished zappi charge schedule.")
+                    self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, "")
+                    self._store_config()
+                    # Reset this so that the Set button returns to it's original color.
+                    self._zappi_charge_schedule_active = False
+                    # Report the kWh added to the EV
+                    self._clear_zappi_charge_schedules_thread(send_charged_msg=True)
+            except Exception as ex:
+                self._error(f"Housekeeping error: {str(ex)}")
+            self._background_stop_event.wait(GUIServer.HOUSEKEEPING_SECONDS)
 
     def _process_rx_dict(self, rxDict):
         """@brief Process the dicts received from the GUI message queue.
            @param rxDict The dict received from the GUI message queue."""
 
         if GUIServer.BOOST_1_ON in rxDict:
-            ui.notify(f'Set top tank heater boost on for {self._bootMinsSlider.value} mins.')
+            ui.notify(f'Set top tank heater boost on for {self._w._bootMinsSlider.value} mins.')
 
         elif GUIServer.BOOST_2_ON in rxDict:
-            ui.notify(f'Set bottom tank heater boost on for {self._bootMinsSlider.value} mins.')
+            ui.notify(f'Set bottom tank heater boost on for {self._w._bootMinsSlider.value} mins.')
 
         elif GUIServer.BOOST_OFF in rxDict:
             ui.notify('Set top and bottom tank heaters off.')
 
         elif GUIServer.ERROR_MESSAGE in rxDict:
             error_message = rxDict[GUIServer.ERROR_MESSAGE]
-            self._clear_zappi_button.enable()
+            self._w._clear_zappi_button.enable()
             ui.notify(f"{error_message}", type='negative')
             if error_message.startswith("-5 status code returned from myenergi server"):
                 ui.notify("The myenergi system may still processing the previous command. Wait some time before trying again.")
@@ -1359,12 +1449,12 @@ class GUIServer(object):
             # If we have confirmation from myenergi that all charge schedules were removed
             if info_message == GUIServer.CLEARED_ALL_CHARGING_SCHEDULES:
                 self._set_zappi_charge_active(False)
-                self._clear_zappi_button.enable()
+                self._w._clear_zappi_button.enable()
 
         elif GUIServer.TANK_TEMPERATURES in rxDict:
             top_tank_temp, bottom_tank_temp = rxDict[GUIServer.TANK_TEMPERATURES]
-            self._topTankTempLabel.text = top_tank_temp
-            self._bottomTankTempLabel.text = bottom_tank_temp
+            self._w._topTankTempLabel.text = top_tank_temp
+            self._w._bottomTankTempLabel.text = bottom_tank_temp
 
         elif GUIServer.ZAPPI_CHARGE_SCHEDULE in rxDict:
             zappi_charge_table = rxDict[GUIServer.ZAPPI_CHARGE_SCHEDULE]
@@ -1375,8 +1465,8 @@ class GUIServer(object):
             self._plot_optimal_charge_times(argList)
 
         elif GUIServer.CLEAR_PLOT in rxDict:
-            if self._plot_container:
-                self._plot_container.clear()
+            if self._w._plot_container:
+                self._w._plot_container.clear()
 
         elif GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE in rxDict:
             charge_complete_msg = rxDict[GUIServer.ZAPPI_CHARGE_COMPLETE_MESSAGE]
@@ -1402,46 +1492,46 @@ class GUIServer(object):
                 ui.label("Bottom")
             with ui.column():
                 ui.label('°C')
-                self._topTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
-                self._bottomTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
+                self._w._topTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
+                self._w._bottomTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
         html.hr()
 
         with ui.row():
             ui.label('Boost Until').style(GUIServer.TEXT_STYLE_A)
 
         with ui.row().classes('w-full'):
-            self._bootMinsSlider = ui.slider(min=15, max=240, value=15, step=15)
-            self._bootMinsSlider.on('update:model-value', self._update_boost_time)
+            self._w._bootMinsSlider = ui.slider(min=15, max=240, value=15, step=15)
+            self._w._bootMinsSlider.on('update:model-value', self._update_boost_time)
             # We call a method to convert the slider value in minutes to a boost until time.
-            ui.label().bind_text_from(self, '_boost_time_value').style(GUIServer.TEXT_STYLE_B)
+            ui.label().bind_text_from(self._w, '_boost_time_value').style(GUIServer.TEXT_STYLE_B)
             self._update_boost_time()
 
         with ui.row():
             ui.label('Boost Control').style(GUIServer.TEXT_STYLE_A)
 
         with ui.row():
-            self._boost_top_button = ColorButton(self._top_boost, 'Top').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
-            self._boost_bottom_button = ColorButton(self._bottom_boost, 'Bottom').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._boost_top_button = ColorButton(self._top_boost, 'Top').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._boost_bottom_button = ColorButton(self._bottom_boost, 'Bottom').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
             # Set the mid color to yellow when heater is powered from the sun.
-            self._boost_top_button.set_button_colors(["blue", 'yellow', 'green'])
-            self._boost_bottom_button.set_button_colors(["blue", 'yellow', 'green'])
-            self._boost_stop_button = ColorButton(self._stop_boost, 'Off').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
-            self._buttonList.append(self._boost_top_button)
-            self._buttonList.append(self._boost_bottom_button)
+            self._w._boost_top_button.set_button_colors(["blue", 'yellow', 'green'])
+            self._w._boost_bottom_button.set_button_colors(["blue", 'yellow', 'green'])
+            self._w._boost_stop_button = ColorButton(self._stop_boost, 'Off').style("width: 100px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._buttonList.append(self._w._boost_top_button)
+            self._w._buttonList.append(self._w._boost_bottom_button)
             # We don't add the _boost_stop_button to this list so that we can always issue a stop boost command
             # as the button will never be disabled.
 
     def _update_boost_time(self):
         """@brief Called to update the boost until time."""
         dt = datetime.now().astimezone()
-        dt = dt + timedelta(minutes=self._bootMinsSlider.value)
+        dt = dt + timedelta(minutes=self._w._bootMinsSlider.value)
         mins_to_add = 15 - (dt.minute % 15)
         dt = dt + timedelta(minutes=mins_to_add)
-        self._boost_time_value = f"{dt.hour:02d}:{dt.minute:02d}"
-        self._boost_until_datetime = dt.replace(second=0, microsecond=0)
+        self._w._boost_time_value = f"{dt.hour:02d}:{dt.minute:02d}"
+        self._w._boost_until_datetime = dt.replace(second=0, microsecond=0)
 
     def _enable_buttons(self, enabled):
-        for _button in self._buttonList:
+        for _button in self._w._buttonList:
             if enabled:
                 _button.enable()
             else:
@@ -1453,7 +1543,7 @@ class GUIServer(object):
         self._eddi_heater_button_selected = 1
         self._enable_buttons(True)
         ui.notify("Setting top boost on.", position='center')
-        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP, self._boost_until_datetime)).start()
+        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_TOP, self._w._boost_until_datetime)).start()
         self._reset_polling_rate()
 
     def _bottom_boost(self):
@@ -1462,7 +1552,7 @@ class GUIServer(object):
         self._eddi_heater_button_selected = 2
         self._enable_buttons(True)
         ui.notify("Setting bottom boost on.", position='center')
-        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM, self._boost_until_datetime)).start()
+        threading.Thread(target=self._set_boost, args=(True, MyEnergi.TANK_BOTTOM, self._w._boost_until_datetime)).start()
         self._reset_polling_rate()
 
     def _stop_boost(self):
@@ -1473,14 +1563,19 @@ class GUIServer(object):
         ui.notify("Turning off boost.", position='center')
         threading.Thread(target=self._set_boost, args=(False, None, None)).start()
         self._reset_polling_rate()
-        self.clear_eddi_boost_schedule_time()
+        # The schedule is being removed now so there is no need to clear it later.
+        self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, "")
+        self._store_config()
 
     def _update_gui(self, msg_dict):
         """@brief Send a message to the GUI to update it.
            @param msg_dict A dict containing details of how to update the GUI."""
         # Record the seconds when we received the message
         msg_dict[GUIServer.GUI_POLL_SECONDS] = time()
-        self._to_gui_queue.put(msg_dict)
+        # Send to every connected browser. If none are connected the message is dropped
+        # (previously it would sit in the queue for ever).
+        for view in list(self._client_views.values()):
+            view.queue.put(msg_dict)
 
     def _previous_quarter_hour(self, dt):
         """@brief Get a datetime instance that is aligned with the a quarter hour starting just before the current one."""
@@ -1511,12 +1606,22 @@ class GUIServer(object):
            @param on_until_time A datetime instance that details when the hot water heating element
                                 should be turned off (if on=True).
            """
-        self._debug("set_boost(on={on}, relay={relay}, on_until_time={on_until_time})")
+        try:
+            self._set_boost_inner(on, relay, on_until_time)
+        except Exception as ex:
+            GUIServer.Print_Exception()
+            msg_dict = {}
+            msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
+            self._update_gui(msg_dict)
+
+    def _set_boost_inner(self, on, relay, on_until_time):
+        """@brief See _set_boost(). Any exception raised here is reported to the GUI."""
+        self._debug(f"set_boost(on={on}, relay={relay}, on_until_time={on_until_time})")
         if on:
             now = datetime.now().astimezone()
             schedule_start_time = self._previous_quarter_hour(now)
             schedule_duration = on_until_time - schedule_start_time
-            self._debug("schedule_start_time={schedule_start_time}, schedule_duration  ={schedule_duration}")
+            self._debug(f"schedule_start_time={schedule_start_time}, schedule_duration={schedule_duration}")
             on_time = on_until_time - now
             heater_name = "top"
             if relay == 2:
@@ -1537,6 +1642,8 @@ class GUIServer(object):
             # successfull command. We want to have it clear before then next 15 minute slot.
             clear_schedule_time = on_until_time + timedelta(minutes=10)
             self._cfg_mgr.addAttr(GUIServer.CLEAR_EDDI_SCHEDULE_TIME, clear_schedule_time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            # Save now so the schedule is still cleared if the app restarts before the boost ends.
+            self._store_config()
             self._debug(GUIServer.CLEAR_EDDI_SCHEDULE_TIME + f"={clear_schedule_time}")
 
         else:
@@ -1587,125 +1694,130 @@ class GUIServer(object):
     def _init_settings_tab(self):
         """@brief Init the tab used to hold app settings."""
         with ui.row():
-            self._api_key = ui.input(label='myenergi API Key').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._api_key = ui.input(label='myenergi API Key').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
         with ui.row():
-            self._eddi_serial_number = ui.input(label='eddi serial number').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._eddi_serial_number = ui.input(label='eddi serial number').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
         with ui.row():
-            self._zappi_serial_number = ui.input(label='zappi serial number').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._zappi_serial_number = ui.input(label='zappi serial number').style("width: 300px; "+GUIServer.TEXT_STYLE_A_SIZE)
         with ui.row():
-            self._zappi_max_charge_rate = ui.select(options=["7.4", "22"],
-                                                    value="7.4",
-                                                    with_input=True,
-                                                    label='Zappi charge rate')
+            self._w._zappi_max_charge_rate = ui.select(options=["7.4", "22"],
+                                                       value="7.4",
+                                                       with_input=True,
+                                                       label='Zappi charge rate')
 
         with ui.row():
             kwh = self._cfg_mgr.getAttr(GUIServer.EV_BATTERY_KWH)
-            self._ev_kwh = ui.number(label='EV Battery (kWh)', value=kwh, format='%.1f')
+            self._w._ev_kwh = ui.number(label='EV Battery (kWh)', value=kwh, format='%.1f')
 
         with ui.row():
-            self._electricity_region_code = ui.select(options=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS,
-                                                      value=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS[0],
-                                                      with_input=True,
-                                                      label='Electricity region code')
+            self._w._electricity_region_code = ui.select(options=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS,
+                                                         value=RegionalElectricity.VALID_REGION_CODE_LIST_WITH_REGIONS[0],
+                                                         with_input=True,
+                                                         label='Electricity region code')
 
         with ui.row():
-            self._tariff_radio = ui.radio(GUIServer.TARIFF_LIST,
-                                          on_change=self._tariff_changed,
-                                          value=GUIServer.TARIFF_LIST[0])
+            self._w._tariff_radio = ui.radio(GUIServer.TARIFF_LIST,
+                                             on_change=self._tariff_changed,
+                                             value=GUIServer.TARIFF_LIST[0])
 
         with ui.row():
             # A plot of energy costs is added to this container when the users requests it
-            self._other_tariff_plot_container = ui.element('div')
+            self._w._other_tariff_plot_container = ui.element('div')
 
         with ui.row():
-            self._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer "
-                                                                          "than is required to reach the target charge. If checked then the battery may be up to 15 mins under charged.")
+            self._w._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer "
+                                                                             "than is required to reach the target charge. If checked then the battery may be up to 15 mins under charged.")
 
         with ui.row():
-            self._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
-            self._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
+            self._w._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
+            self._w._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
 
         with ui.row():
-            self._config_save_button = ui.button('Save', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._save_config_button_selected)
+            self._w._config_save_button = ui.button('Save', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._save_config_button_selected)
 
-        self._api_key.value = self._cfg_mgr.getAttr(GUIServer.MYENERGI_API_KEY)
-        self._eddi_serial_number.value = self._cfg_mgr.getAttr(GUIServer.EDDI_SERIAL_NUMBER)
-        self._zappi_serial_number.value = self._cfg_mgr.getAttr(GUIServer.ZAPPI_SERIAL_NUMBER)
-        self._zappi_max_charge_rate.value = self._cfg_mgr.getAttr(GUIServer.ZAPPI_MAX_CHARGE_RATE)
-        self._electricity_region_code.value = self._cfg_mgr.getAttr(GUIServer.ELECTRICITY_REGION_CODE)
+        self._w._api_key.value = self._cfg_mgr.getAttr(GUIServer.MYENERGI_API_KEY)
+        self._w._eddi_serial_number.value = self._cfg_mgr.getAttr(GUIServer.EDDI_SERIAL_NUMBER)
+        self._w._zappi_serial_number.value = self._cfg_mgr.getAttr(GUIServer.ZAPPI_SERIAL_NUMBER)
+        self._w._zappi_max_charge_rate.value = self._cfg_mgr.getAttr(GUIServer.ZAPPI_MAX_CHARGE_RATE)
+        self._w._electricity_region_code.value = self._cfg_mgr.getAttr(GUIServer.ELECTRICITY_REGION_CODE)
         self._octopus_agile_tariff = self._cfg_mgr.getAttr(GUIServer.OCTOPUS_AGILE_TARIFF)
         self._set_octopus_agile_tariff(self._octopus_agile_tariff)
         self._enable_octopus_agile_tariff(self._octopus_agile_tariff)
-        self._undershoot_checkbox.value = self._cfg_mgr.getAttr(GUIServer.UNDERSHOOT_CHARGE)
+        self._w._undershoot_checkbox.value = self._cfg_mgr.getAttr(GUIServer.UNDERSHOOT_CHARGE)
 
-    def _save_config_button_selected(self):
+    async def _save_config_button_selected(self):
         """@brief Called when the save button is selected by the user in the Setting tab."""
-        self._save_config()
-        # Create a new instance of the interface to talk to the myenergi products
-        self._create_myenergi()
+        save_button = self._w._config_save_button
+        save_button.disable()
+        try:
+            if await self._save_settings():
+                # Create a new instance of the interface to talk to the myenergi products
+                self._create_myenergi()
+        finally:
+            save_button.enable()
 
     def _set_octopus_agile_tariff(self, enabled):
         """@brief Set the radio buttons to enable the octopus agile tariff or the other (manually entered) tariff."""
         if enabled:
-            self._tariff_radio.value = GUIServer.TARIFF_LIST[0]
+            self._w._tariff_radio.value = GUIServer.TARIFF_LIST[0]
         else:
-            self._tariff_radio.value = GUIServer.TARIFF_LIST[1]
+            self._w._tariff_radio.value = GUIServer.TARIFF_LIST[1]
 
     def _enable_octopus_agile_tariff(self, enabled):
         """@brief Called when the octopus agile tariff is enabled."""
         if enabled:
-            self._add_tariff_value_button.disable()
-            self._clear_tariff_value_button.disable()
+            self._w._add_tariff_value_button.disable()
+            self._w._clear_tariff_value_button.disable()
         else:
-            self._add_tariff_value_button.enable()
-            self._clear_tariff_value_button.enable()
+            self._w._add_tariff_value_button.enable()
+            self._w._clear_tariff_value_button.enable()
 
     def _tariff_changed(self):
         """@brief Called when the tariff radio button is selected."""
         octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
         self._enable_octopus_agile_tariff(octopus_agile_tariff)
         if octopus_agile_tariff:
-            self._add_tariff_value_button.disable()
-            self._clear_tariff_value_button.disable()
-            if self._other_tariff_plot_container:
-                self._other_tariff_plot_container.clear()
+            self._w._add_tariff_value_button.disable()
+            self._w._clear_tariff_value_button.disable()
+            if self._w._other_tariff_plot_container:
+                self._w._other_tariff_plot_container.clear()
 
         else:
-            self._add_tariff_value_button.enable()
-            self._clear_tariff_value_button.enable()
+            self._w._add_tariff_value_button.enable()
+            self._w._clear_tariff_value_button.enable()
             # We only display the other tarrif plot as the agile tariff will change
             self._plot_tariff()
 
     def _add_tariff_value(self):
         """@brief Add a tariff value to the displayed other tariff."""
-        self._add_tariff_dialog = YesNoDialog("Add one tariff point.",
-                                              self._tariff_value_entered,
-                                              successButtonText="OK",
-                                              failureButtonText="Cancel")
-        self._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
-        self._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_PRICE, YesNoDialog.NUMBER_INPUT_FIELD_TYPE, minNumber=0, maxNumber=2, step=0.01)
-        self._add_tariff_dialog.show()
+        self._w._add_tariff_dialog = YesNoDialog("Add one tariff point.",
+                                                 self._tariff_value_entered,
+                                                 successButtonText="OK",
+                                                 failureButtonText="Cancel")
+        self._w._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+        self._w._add_tariff_dialog.addField(GUIServer.ADD_TARIFF_PRICE, YesNoDialog.NUMBER_INPUT_FIELD_TYPE, minNumber=0, maxNumber=2, step=0.01)
+        self._w._add_tariff_dialog.show()
 
     def _calc_cost_initial_step(self):
         """@brief Octopus Energy (and maybe other providers) currently send notifications to some customers (in areas that have high levels of green energy)
                   that they can have periods of time with free energy (Octopus Energy refer to these as 'Power Ups').
                   If the user selected the 'Free energy period' dialog then the user can enter the up coming free energy period so that the calculation of
                   the optimal charge time takes this into account."""
-        if self._free_energy_checkbox.value:
-            self._add_free_elect_period_dialog = YesNoDialog("Add free energy period.",
-                                                             self._free_period_entered,
-                                                             successButtonText="OK",
-                                                             failureButtonText="Cancel")
-            self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
-            self._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_DURATION, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
-            self._add_free_elect_period_dialog.show()
+        if self._w._free_energy_checkbox.value:
+            self._w._add_free_elect_period_dialog = YesNoDialog("Add free energy period.",
+                                                                self._free_period_entered,
+                                                                successButtonText="OK",
+                                                                failureButtonText="Cancel")
+            self._w._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_START_TIME, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+            self._w._add_free_elect_period_dialog.addField(GUIServer.ZERO_COST_ELEC_DURATION, YesNoDialog.HOUR_MIN_INPUT_FIELD_TYPE)
+            self._w._add_free_elect_period_dialog.show()
         else:
             self._calc_optimal_charge_times()
 
     def _free_period_entered(self):
         """@brief Called if the user enters a period of time when they should get free energy. E.G Octopus 'Power Ups'"""
-        start_time = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_START_TIME)
-        duration = self._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_DURATION)
+        start_time = self._w._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_START_TIME)
+        duration = self._w._add_free_elect_period_dialog.getValue(GUIServer.ZERO_COST_ELEC_DURATION)
         self._calc_optimal_charge_times(free_start_time=start_time, free_duration=duration)
 
     def _get_hour_min(self, tstr):
@@ -1727,8 +1839,8 @@ class GUIServer(object):
         return (hour, min)
 
     def _tariff_value_entered(self):
-        start_time = self._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_START_TIME)
-        price = self._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_PRICE)
+        start_time = self._w._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_START_TIME)
+        price = self._w._add_tariff_dialog.getValue(GUIServer.ADD_TARIFF_PRICE)
         try:
             if start_time and len(start_time) > 0 and price > 0.0:
                 hour, min = self._get_hour_min(start_time)
@@ -1840,10 +1952,10 @@ class GUIServer(object):
                                   range=[0, max_cost*1.5]
                               ),)
             fig.add_trace(go.Bar(x=time_intervals, y=prices, marker=dict(color='green')))
-            if self._other_tariff_plot_container:
-                self._other_tariff_plot_container.clear()
+            if self._w._other_tariff_plot_container:
+                self._w._other_tariff_plot_container.clear()
                 # Add the new plot to the container
-                with self._other_tariff_plot_container:
+                with self._w._other_tariff_plot_container:
                     ui.plotly(fig)
 
         except Exception as ex:
@@ -1853,42 +1965,37 @@ class GUIServer(object):
     def _clear_tariff(self):
         """@brief Clear the other tariff values."""
         self._other_tariff_values = []
-        if self._other_tariff_plot_container:
-            self._other_tariff_plot_container.clear()
+        if self._w._other_tariff_plot_container:
+            self._w._other_tariff_plot_container.clear()
 
-    def _check_eddi_access_ok(self, show_info=True):
+    @staticmethod
+    def CHECK_EDDI_ACCESS(api_key, eddi_serial_number):
         """@brief Check that the stats can be read from the myenergi eddi unit.
-           @param show_info If True then show info messages.
-           @return True if eddi access ok."""
-        ok = False
+                  This accesses the network so should not be called in the GUI thread.
+           @return None if OK, else an error message."""
         try:
-            myEnergi = MyEnergi(self._api_key.value)
-            myEnergi.set_eddi_serial_number(self._eddi_serial_number.value)
-            myEnergi.get_eddi_stats()
-            if show_info:
-                ui.notify("Successfully read eddi stats.", position='center')
-            ok = True
+            my_energi = MyEnergi(api_key)
+            my_energi.set_eddi_serial_number(eddi_serial_number)
+            my_energi.get_eddi_stats()
+            return None
         except Exception as ex:
             GUIServer.Print_Exception()
-            ui.notify(f"eddi: {str(ex)}", type='negative')
-        return ok
+            return str(ex)
 
-    def _check_zappi_access_ok(self, show_info=True):
+    @staticmethod
+    def CHECK_ZAPPI_ACCESS(api_key, eddi_serial_number, zappi_serial_number):
         """@brief Check that the stats can be read from the myenergi zappi unit.
-           @return True if eddi access ok."""
-        ok = False
+                  This accesses the network so should not be called in the GUI thread.
+           @return None if OK, else an error message."""
         try:
-            myEnergi = MyEnergi(self._api_key.value)
-            myEnergi.set_eddi_serial_number(self._eddi_serial_number.value)
-            myEnergi.set_zappi_serial_number(self._zappi_serial_number.value)
-            myEnergi.get_zappi_stats()
-            if show_info:
-                ui.notify("Successfully read zappi stats.", position='center')
-            ok = True
+            my_energi = MyEnergi(api_key)
+            my_energi.set_eddi_serial_number(eddi_serial_number)
+            my_energi.set_zappi_serial_number(zappi_serial_number)
+            my_energi.get_zappi_stats()
+            return None
         except Exception as ex:
             GUIServer.Print_Exception()
-            ui.notify(f"zappi: {str(ex)}", type='negative')
-        return ok
+            return str(ex)
 
     def _show_regional_codes(self):
         """@brief Show the regional electricity codes.
@@ -1920,36 +2027,36 @@ class GUIServer(object):
         with ui.row().classes('w-full'):
             with ui.row().classes('w-full'):
                 ui.label('Target EV charge (%)')
-                self._target_ev_charge_input = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
-            self._target_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE)
+                self._w._target_ev_charge_input = ui.number(min=5, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._w._target_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.TARGET_EV_CHARGE_PERCENTAGE)
 
         with ui.row().classes('w-full'):
             with ui.row().classes('w-full'):
                 ui.label('Current EV charge (%)')
-                self._current_ev_charge_input = ui.number(min=0, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
-            self._current_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
+                self._w._current_ev_charge_input = ui.number(min=0, max=100, value=0).style(GUIServer.TEXT_STYLE_D_SIZE)
+            self._w._current_ev_charge_input.value = self._cfg_mgr.getAttr(GUIServer.CURRENT_EV_CHARGE_PERCENTAGE)
 
         # Put this off the bottom of the mobile screen as most times it will not be needed
         # and there is not enough room on the mobile screen above the plot pane.
-        self._end_charge_time_input = self._get_input_time_field('Ready by')
-        self._end_charge_time_input.value = self._cfg_mgr.getAttr(GUIServer.READY_BY)
+        self._w._end_charge_time_input = self._get_input_time_field('Ready by')
+        self._w._end_charge_time_input.value = self._cfg_mgr.getAttr(GUIServer.READY_BY)
 
-        self._free_energy_checkbox = ui.checkbox('Free energy period')
+        self._w._free_energy_checkbox = ui.checkbox('Free energy period')
 
         with ui.row():
             # A plot of energy costs is added to this container when the users requests it
-            self._plot_container = ui.element('div')
+            self._w._plot_container = ui.element('div')
 
         with ui.row():
-            self._calc_button = ColorButton(self._calc_cost_initial_step, 'Calc')
-            self._calc_button.tooltip("Calculate the optimal charge time/s.")
-            self._set_button = ColorButton(self._set_zappi_charge, 'Set')
-            self._set_button.tooltip('Set the displayed charge schedule on your zappi charger.')
-            self._get_button = ColorButton(self._get_zappi_charge, 'Get')
-            self._get_button.tooltip('Get the current charge schedule on your zappi.')
+            self._w._calc_button = ColorButton(self._calc_cost_initial_step, 'Calc')
+            self._w._calc_button.tooltip("Calculate the optimal charge time/s.")
+            self._w._set_button = ColorButton(self._set_zappi_charge, 'Set')
+            self._w._set_button.tooltip('Set the displayed charge schedule on your zappi charger.')
+            self._w._get_button = ColorButton(self._get_zappi_charge, 'Get')
+            self._w._get_button.tooltip('Get the current charge schedule on your zappi.')
 
-            self._clear_zappi_button = ColorButton(self._clear_zappi_charge_schedules, 'Clear')
-            self._clear_zappi_button.tooltip('Clear all charge schedules from your zappi charger.')
+            self._w._clear_zappi_button = ColorButton(self._clear_zappi_charge_schedules, 'Clear')
+            self._w._clear_zappi_button.tooltip('Clear all charge schedules from your zappi charger.')
 
     def _get_zappi_charge(self):
         """@brief Get the current zappi charge schedule."""
@@ -1989,11 +2096,11 @@ class GUIServer(object):
         """@brief Display the table of configured zappi charge schedules.
            @param zappi_charge_sched_table A list of rows in the zappi charge schedule table."""
         # If we have somewhere to display the table.
-        if self._plot_container:
+        if self._w._plot_container:
             # Clear it's current contents.
-            self._plot_container.clear()
+            self._w._plot_container.clear()
             # Add the table to the displayed gui
-            with self._plot_container:
+            with self._w._plot_container:
                 columns = [
                     {'name': 'Time', 'label': 'Time', 'field': 'Time', 'required': True, 'align': 'left'},
                     {'name': 'Duration', 'label': 'Duration', 'field': 'Duration', 'sortable': True},
@@ -2033,7 +2140,7 @@ class GUIServer(object):
            @return A tuple
                    0 = Hours
                    1 = mins"""
-        return self._get_hours_mins(self._end_charge_time_input.value)
+        return self._get_hours_mins(self._w._end_charge_time_input.value)
 
     def _get_hours_mins(self, text):
         """@brief Get the hours and minutes from a string.
@@ -2067,18 +2174,18 @@ class GUIServer(object):
         free_start_time_hh_mm = self._get_hours_mins(free_start_time)
         free_duration_hh_mm = self._get_hours_mins(free_duration)
 
-        self._save_config(show_info=False)
+        self._save_charge_fields()
 
-        current_ev_charge_percentage = float(self._current_ev_charge_input.value)
-        target_ev_charge_percentage = float(self._target_ev_charge_input.value)
+        current_ev_charge_percentage = float(self._w._current_ev_charge_input.value)
+        target_ev_charge_percentage = float(self._w._target_ev_charge_input.value)
         if target_ev_charge_percentage > 100:
             ui.notify("The target EV charge cannot be greater than 100 %.", type='negative')
             return
 
         # Define the target as a float at the top end of the value.
-        target_ev_charge_percentage = float(int(self._target_ev_charge_input.value)) + 0.99
+        target_ev_charge_percentage = float(int(self._w._target_ev_charge_input.value)) + 0.99
 
-        ev_battery_kwh = self._ev_kwh.value
+        ev_battery_kwh = self._w._ev_kwh.value
 
         if ev_battery_kwh <= 0.0:
             ui.notify("Please set an EV battery capacity greater than 0 in the settings tab.", type='negative')
@@ -2106,13 +2213,13 @@ class GUIServer(object):
             return
 
         if charge > 0:
-            charge_time_mins = int((charge/float(self._zappi_max_charge_rate.value))*60)
+            charge_time_mins = int((charge/float(self._w._zappi_max_charge_rate.value))*60)
             # Ensure a multiple of 15 mins as we don't want to be turning the charger on/off
             # any more quickly than this. MyEnergi only allows charge times in chunks of 15 mins.
             remainder = charge_time_mins % 15
             if remainder > 0:
                 charge_time_mins = charge_time_mins - remainder
-                if not self._undershoot_checkbox.value:
+                if not self._w._undershoot_checkbox.value:
                     # Round up to 15 min intervals. This should mean that the EV charge is least at the required charge level.
                     # Worst case we charge almost 15 mins longer than is needed to reach the required charge level.
                     charge_time_mins += 15
@@ -2125,15 +2232,16 @@ class GUIServer(object):
             ui.notify("Calculating optimal charge time/s.", position='center', type='ongoing', timeout=1000)
             threading.Thread(target=self.calc_optimal_charge_times_thread, args=(region_code,
                                                                                  charge_time_mins,
-                                                                                 float(self._zappi_max_charge_rate.value),
+                                                                                 float(self._w._zappi_max_charge_rate.value),
                                                                                  self._get_end_charge_time(),
                                                                                  free_start_time_hh_mm,
-                                                                                 free_duration_hh_mm)).start()
+                                                                                 free_duration_hh_mm,
+                                                                                 self._is_octopus_agile_tariff_enabled())).start()
 
     def _get_region_code(self):
         """@brief Get the electricity region code.
            @return The single letter electricity region code or None if not set."""
-        region_code = self._electricity_region_code.value
+        region_code = self._w._electricity_region_code.value
         if region_code:
             elems = region_code.split()
             region_code = elems[0]
@@ -2142,23 +2250,15 @@ class GUIServer(object):
     @staticmethod
     def GET_END_CHARGE_DATETIME(end_charge_time):
         """@brief Get the end charge time as a datetime instance.
-           @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed or None if no charge time defined."""
+           @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed or None if no charge time defined.
+           @return The next occurrence of that time (today if still to come, else tomorrow) or None."""
         end_charge_datetime = None
-        # If the end charge time is defined then ensure we don't have time after this in the list.
         if end_charge_time:
             now = datetime.now().astimezone()
-            end_charge_time_today = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
-            # If the user entered a time that is earlier today
-            if end_charge_time_today < now:
-                # Assume that the time entered is is tomorrow.
-                end_charge_time_tomorrow = end_charge_time_today + timedelta(days=1)
-                end_charge_datetime = end_charge_time_tomorrow
-            else:
-                now = datetime.now().astimezone()
-                # Add the HH:MM to the time
-                then = now + timedelta(hours=end_charge_time[0], minutes=end_charge_time[1])
-                then = then.replace(second=0, microsecond=0)
-                end_charge_datetime = then
+            end_charge_datetime = now.replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+            # If the time has already passed today then it must be tomorrow.
+            if end_charge_datetime <= now:
+                end_charge_datetime = end_charge_datetime + timedelta(days=1)
         return end_charge_datetime
 
     def _get_tariff_data(self, end_charge_time):
@@ -2175,7 +2275,8 @@ class GUIServer(object):
 
             tmp_time_intervals = []
             for time_interval in time_intervals:
-                if then < time_interval:
+                # Stop at the first slot that would finish after the end charge time
+                if time_interval + timedelta(minutes=30) > then:
                     break
                 tmp_time_intervals.append(time_interval)
             time_intervals = tmp_time_intervals
@@ -2225,7 +2326,8 @@ class GUIServer(object):
                             charge_rate_kw,
                             region_code,
                             free_start_time_hh_mm,
-                            free_duration_hh_mm):
+                            free_duration_hh_mm,
+                            octopus_agile_tariff):
         """@brief Get the requested charge details.
            @param charge_mins The required charge time in mins.
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
@@ -2233,6 +2335,7 @@ class GUIServer(object):
            @param region_code The regional electricity code.
            @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
            @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
+           @param octopus_agile_tariff True if the Octopus Agile tariff is selected (read in the GUI thread).
            @return A tuple containing
                    0: A list of charge details dicts.
                    1: The end charge time (datetime instance)
@@ -2240,7 +2343,7 @@ class GUIServer(object):
                    3: A list of the costs for each charge slot.
                    4: The total charge time in mins.
                    5: The total charge cost"""
-        if self._is_octopus_agile_tariff_enabled():
+        if octopus_agile_tariff:
             # Display a message to the user if they attempt to charge before 16:00
             now = datetime.now().astimezone()
             then = now.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -2259,9 +2362,11 @@ class GUIServer(object):
 
         else:
             plot_time_stamp_list, plot_cost_list = self._get_tariff_data(end_charge_time)
-            end_charge_datetime = plot_time_stamp_list[-1]
+            if len(plot_time_stamp_list) == 0:
+                raise Exception("The ready by time is too soon to charge.")
+            end_charge_datetime = plot_time_stamp_list[-1] + timedelta(minutes=30)
             if end_charge_time:
-                end_charge_datetime = plot_time_stamp_list[-1].replace(hour=end_charge_time[0], minute=end_charge_time[1], second=0, microsecond=0)
+                end_charge_datetime = GUIServer.GET_END_CHARGE_DATETIME(end_charge_time)
 
         # Check we have enough time to add the required charge
         available_charge_time = end_charge_datetime - plot_time_stamp_list[0]
@@ -2356,7 +2461,8 @@ class GUIServer(object):
                                          charge_rate_kw,
                                          end_charge_time,
                                          free_start_time_hh_mm,
-                                         free_duration_hh_mm):
+                                         free_duration_hh_mm,
+                                         octopus_agile_tariff):
         """@brief Calculate optimal charge times.
            @param region_code The regional electricity code.
            @param plot_container The container that will hold the plot.
@@ -2365,6 +2471,7 @@ class GUIServer(object):
            @param end_charge_time The time (a tuple hours,mins) at which the charging must have completed.
            @param free_start_time_hh_mm A tuple containing HH, MM of the start time of a free energy period or None if no free energy period is available.
            @param free_duration_hh_mm A tuple containing HH, MM of the duration of a free energy period or None if no free energy period is available.
+           @param octopus_agile_tariff True if the Octopus Agile tariff is selected.
            @return A dict containing the slots that the car should charge in."""
         try:
             # Check if the EV is plugged in and warn the user but allow them to proceed with calc
@@ -2375,7 +2482,8 @@ class GUIServer(object):
                                                                                                                                                  charge_rate_kw,
                                                                                                                                                  region_code,
                                                                                                                                                  free_start_time_hh_mm,
-                                                                                                                                                 free_duration_hh_mm)
+                                                                                                                                                 free_duration_hh_mm,
+                                                                                                                                                 octopus_agile_tariff)
 
             msg_dict = {}
             msg_dict[GUIServer.PLOT_OPTIMAL_CHARGE_TIMES] = (charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost)
@@ -2401,7 +2509,7 @@ class GUIServer(object):
         charge_slot_dict_list, end_charge_datetime, plot_time_stamp_list, plot_cost_list, total_charge_mins, cost = arg_list
         try:
             # Clear the old plot
-            self._plot_container.clear()
+            self._w._plot_container.clear()
 
             fig = go.Figure()
             max_cost = max(plot_cost_list)
@@ -2434,15 +2542,15 @@ class GUIServer(object):
             self._plot_charge_times(fig, charge_slot_dict_list)
 
             # Add the new plot to the container
-            with self._plot_container:
+            with self._w._plot_container:
                 ui.plotly(fig)
 
-            with self._plot_container:
+            with self._w._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
                 charge_adjustment_factor = float(self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT))
-                kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value))
+                kwh = charge_adjustment_factor * (hours_charge_factor*float(self._w._zappi_max_charge_rate.value))
                 self._target_ev_charge_kwh = kwh
-                battery_charged_percentage = self._target_ev_charge_input.value
+                battery_charged_percentage = self._w._target_ev_charge_input.value
                 # we may be charging slightly longer than is required (due to 15 min charge increments)
                 # so limit the max to 100%
                 if battery_charged_percentage > 100.0:
@@ -2521,6 +2629,23 @@ class GUIServer(object):
                 current_slot_start_dict[RegionalElectricity.SLOT_STOP_DATETIME] = current_slot_end_dict[RegionalElectricity.SLOT_STOP_DATETIME]
                 merged_charge_slot_dict_list.append(current_slot_start_dict)
 
+        # A zappi schedule can't be 9 hours or more so split any long merged slots.
+        max_slot = timedelta(hours=8, minutes=45)
+        split_charge_slot_dict_list = []
+        for slot_dict in merged_charge_slot_dict_list:
+            start = slot_dict[RegionalElectricity.SLOT_START_DATETIME]
+            stop = slot_dict[RegionalElectricity.SLOT_STOP_DATETIME]
+            while stop - start > max_slot:
+                piece = dict(slot_dict)
+                piece[RegionalElectricity.SLOT_START_DATETIME] = start
+                piece[RegionalElectricity.SLOT_STOP_DATETIME] = start + max_slot
+                split_charge_slot_dict_list.append(piece)
+                start = start + max_slot
+            piece = dict(slot_dict)
+            piece[RegionalElectricity.SLOT_START_DATETIME] = start
+            split_charge_slot_dict_list.append(piece)
+        merged_charge_slot_dict_list = split_charge_slot_dict_list
+
         try:
             if len(merged_charge_slot_dict_list) == 0:
                 raise Exception("The calculated charge schedule has no duration.")
@@ -2539,6 +2664,8 @@ class GUIServer(object):
             # successfull command. We want to have it clear before the next 15 minute charge slot.
             clear_schedule_time = charge_end_time + timedelta(minutes=10)
             self._cfg_mgr.addAttr(GUIServer.CLEAR_ZAPPI_SCHEDULE_TIME, clear_schedule_time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            # Save now so the schedule is still cleared if the app restarts before the charge ends.
+            self._store_config()
 
         except Exception as ex:
             GUIServer.Print_Exception()
@@ -2551,11 +2678,11 @@ class GUIServer(object):
                   Called from the GUI thread when the user presses the clear schedules button.
                   This starts the thread that actually does the work."""
         ui.notify("Clearing all zappi charge schedules", position='center', type='ongoing', timeout=4500)
-        self._plot_container.clear()
+        self._w._plot_container.clear()
         self._charge_slot_dict_list = None
         # Reset this so that the Set button returns to it's original color.
         self._zappi_charge_schedule_active = False
-        self._clear_zappi_button.disable()
+        self._w._clear_zappi_button.disable()
         threading.Thread(target=self._clear_zappi_charge_schedules_thread).start()
 
     def _clear_zappi_charge_schedules_thread(self, send_charged_msg=False):
@@ -2595,23 +2722,26 @@ class GUIServer(object):
         except Exception:
             return default
 
-    def _start_tank_temp_recorder(self):
-        """@brief Start the thread that records the tank temperatures.
-                  This runs whether or not a browser is connected so the history has no gaps."""
-        if self._temp_recorder_thread is None:
-            self._temp_recorder_stop_event.clear()
-            self._temp_recorder_thread = threading.Thread(target=self._tank_temp_recorder_thread, daemon=True)
-            self._temp_recorder_thread.start()
+    def _start_background_threads(self):
+        """@brief Start the threads that run whether or not a browser is connected.
+                  - The tank temperature recorder.
+                  - Housekeeping (removes finished eddi/zappi schedules)."""
+        if not self._background_threads:
+            self._background_stop_event.clear()
+            for target in (self._tank_temp_recorder_thread, self._housekeeping_thread):
+                thread = threading.Thread(target=target, daemon=True)
+                thread.start()
+                self._background_threads.append(thread)
 
-    def _stop_tank_temp_recorder(self):
-        """@brief Stop the tank temperature recorder thread."""
-        self._temp_recorder_stop_event.set()
+    def _stop_background_threads(self):
+        """@brief Stop the background threads."""
+        self._background_stop_event.set()
 
     def _tank_temp_recorder_thread(self):
         """@brief Periodically read the tank temperatures from the myenergi server and record them."""
         interval = self._get_cmd_line_int(GUIServer.TANK_TEMP_RECORD_SECONDS_INT, GUIServer.DEFAULT_TANK_TEMP_RECORD_SECONDS)
         self._info(f"Recording tank temperatures every {interval} seconds.")
-        while not self._temp_recorder_stop_event.is_set():
+        while not self._background_stop_event.is_set():
             try:
                 if self._is_eddi_config_entered():
                     # Take a local reference as the MyEnergi instance is replaced if the user saves the settings.
@@ -2630,23 +2760,23 @@ class GUIServer(object):
             except Exception as ex:
                 # Network issues are expected occasionally. Log and carry on, don't bother the GUI user.
                 self._error(f"Failed to record tank temperatures: {str(ex)}")
-            self._temp_recorder_stop_event.wait(interval)
+            self._background_stop_event.wait(interval)
 
     def _init_temps_tab(self):
         """@brief Init the tab used to display the tank temperature history."""
         with ui.row().classes('w-full items-center'):
-            self._temp_period_select = ui.select(options=list(GUIServer.TEMP_PLOT_PERIODS.keys()),
-                                                 value=GUIServer.DEFAULT_TEMP_PLOT_PERIOD,
-                                                 label='Period',
-                                                 on_change=self._plot_tank_temps).style("width: 150px; " + GUIServer.TEXT_STYLE_A_SIZE)
+            self._w._temp_period_select = ui.select(options=list(GUIServer.TEMP_PLOT_PERIODS.keys()),
+                                                    value=GUIServer.DEFAULT_TEMP_PLOT_PERIOD,
+                                                    label='Period',
+                                                    on_change=self._plot_tank_temps).style("width: 150px; " + GUIServer.TEXT_STYLE_A_SIZE)
             ColorButton(self._plot_tank_temps, 'Refresh').tooltip("Update the tank temperature plot.")
             ColorButton(self._clear_tank_temp_history, 'Clear').tooltip("Delete all recorded tank temperatures.")
-            self._heater_shade_checkbox = ui.checkbox('Heater', value=True, on_change=self._plot_tank_temps)
-            self._heater_shade_checkbox.tooltip("Shade when the immersion heaters were on. Upper half = top heater, lower half = bottom heater. "
-                                                "Yellow = solar, green = mains.")
+            self._w._heater_shade_checkbox = ui.checkbox('Heater', value=True, on_change=self._plot_tank_temps)
+            self._w._heater_shade_checkbox.tooltip("Shade when the immersion heaters were on. Upper half = top heater, lower half = bottom heater. "
+                                                   "Yellow = solar, green = mains.")
 
         with ui.row():
-            self._temp_plot_container = ui.element('div')
+            self._w._temp_plot_container = ui.element('div')
 
         self._plot_tank_temps()
         # Keep the plot up to date while the page is open.
@@ -2706,13 +2836,13 @@ class GUIServer(object):
     def _plot_tank_temps(self):
         """@brief Plot the recorded top and bottom tank temperatures, shading the periods
                   when each immersion heater was on and whether it was powered by solar or mains."""
-        if self._temp_plot_container is None or self._temp_period_select is None:
+        if self._w._temp_plot_container is None or self._w._temp_period_select is None:
             return
         try:
-            hours = GUIServer.TEMP_PLOT_PERIODS.get(self._temp_period_select.value, 24)
+            hours = GUIServer.TEMP_PLOT_PERIODS.get(self._w._temp_period_select.value, 24)
             samples = self._tank_temp_history.get(hours)
-            self._temp_plot_container.clear()
-            with self._temp_plot_container:
+            self._w._temp_plot_container.clear()
+            with self._w._temp_plot_container:
                 if len(samples) == 0:
                     ui.label("No tank temperatures recorded yet.").style(GUIServer.TEXT_STYLE_C)
                     return
@@ -2752,7 +2882,7 @@ class GUIServer(object):
                                   ),)
 
                 heater_on_mins = {GUIServer.HEATER_SOURCE_SOLAR: 0.0, GUIServer.HEATER_SOURCE_MAINS: 0.0}
-                if self._heater_shade_checkbox is None or self._heater_shade_checkbox.value:
+                if self._w._heater_shade_checkbox is None or self._w._heater_shade_checkbox.value:
                     for start, stop, heater_no, source in self._get_heater_runs(samples):
                         # Top heater shades the upper half of the plot, bottom heater the lower half.
                         y0, y1 = (0.5, 1.0) if heater_no == MyEnergi.TANK_TOP else (0.0, 0.5)
@@ -2770,7 +2900,7 @@ class GUIServer(object):
                 ui.plotly(fig)
                 ui.label(f"Now: top {top_list[-1]:.0f} °C, bottom {bottom_list[-1]:.0f} °C "
                          f"(at {ts_list[-1].strftime('%H:%M')})").style(GUIServer.TEXT_STYLE_C)
-                if self._heater_shade_checkbox is None or self._heater_shade_checkbox.value:
+                if self._w._heater_shade_checkbox is None or self._w._heater_shade_checkbox.value:
                     solar = heater_on_mins[GUIServer.HEATER_SOURCE_SOLAR]
                     mains = heater_on_mins[GUIServer.HEATER_SOURCE_MAINS]
                     ui.label(f"Heater on: solar {solar/60:.1f} h, mains {mains/60:.1f} h").style(GUIServer.TEXT_STYLE_C)
