@@ -879,6 +879,159 @@ class TankTempHistory(object):
         self._rewrite_file()
 
 
+class HotWaterTank(object):
+    """@brief Estimates the hot water stored in the tank and the tank's heat loss from the
+              top and bottom tank temperatures.
+
+              The tank is modelled as two halves, the top half at the top sensor temperature and
+              the bottom half at the bottom sensor temperature. This is an approximation as the
+              water in the tank is stratified (hottest at the top), but it is a lot better than
+              using a single average temperature."""
+
+    KWH_PER_LITRE_KELVIN = 4.186 / 3600.0      # Specific heat of water (1 litre ~ 1 kg)
+    STANDARD_LOSS_DELTA_K = 45                  # Cylinder labels quote standing loss at 65 °C tank, 20 °C room
+    MIN_LOSS_PERIOD_HOURS = 3.0                 # A cooling period must be at least this long to be used
+    MIN_LOSS_DELTA_K = 10.0                     # Ignore periods when the tank is close to room temperature
+    DRAW_OFF_DROP_C = 2.0                       # A drop this big ...
+    DRAW_OFF_WINDOW = timedelta(minutes=15)     # ... within this time means hot water was used (or the tank was heated)
+    SETTLE_TIME = timedelta(minutes=30)         # Ignore this long after hot water use while the tank settles
+    MAX_LOSS_PERIODS = 5                        # Use the most recent cooling periods
+
+    def __init__(self, volume_litres, cold_water_c, use_temp_c, shower_litres, ambient_c):
+        """@brief Constructor
+           @param volume_litres The tank volume in litres.
+           @param cold_water_c The temperature of the cold water that refills the tank (°C).
+           @param use_temp_c The temperature hot water is used at, E.G a shower (°C).
+           @param shower_litres The litres of water at use_temp_c used by one shower.
+           @param ambient_c The temperature of the air around the tank (°C)."""
+        self.volume_litres = volume_litres
+        self.cold_water_c = cold_water_c
+        self.use_temp_c = use_temp_c
+        self.shower_litres = shower_litres
+        self.ambient_c = ambient_c
+
+    def stored_kwh(self, top_c, bottom_c):
+        """@return The heat stored in the tank (kWh) relative to cold water."""
+        half = self.volume_litres / 2.0
+        kwh = 0.0
+        for temp in (top_c, bottom_c):
+            kwh += half * HotWaterTank.KWH_PER_LITRE_KELVIN * max(0.0, temp - self.cold_water_c)
+        return kwh
+
+    def litres_at_use_temp(self, top_c, bottom_c):
+        """@return The litres of water at the use temperature that the tank can supply once mixed with cold water.
+                   Only water hotter than the use temperature counts."""
+        half = self.volume_litres / 2.0
+        litres = 0.0
+        for temp in (top_c, bottom_c):
+            if temp > self.use_temp_c:
+                litres += half * (temp - self.cold_water_c) / (self.use_temp_c - self.cold_water_c)
+        return litres
+
+    def showers(self, top_c, bottom_c):
+        """@return The number of showers the tank can supply."""
+        return self.litres_at_use_temp(top_c, bottom_c) / self.shower_litres
+
+    def find_cooling_periods(self, samples, min_heater_watts):
+        """@brief Find periods when the tank was just cooling: heater off, no hot water used and no gaps in the data.
+           @param samples A list of samples as returned by TankTempHistory.get().
+           @param min_heater_watts Below this power the heater is off.
+           @return A list of lists of samples, one list per cooling period."""
+        if len(samples) < 2:
+            return []
+        gaps = sorted(samples[i + 1][0] - samples[i][0] for i in range(len(samples) - 1))
+        max_gap = gaps[len(gaps) // 2] * 3
+
+        periods = []
+        current = []
+        settle_until = None
+
+        def close():
+            if current and current[-1][0] - current[0][0] >= timedelta(hours=HotWaterTank.MIN_LOSS_PERIOD_HOURS):
+                periods.append(list(current))
+            current.clear()
+
+        for sample in samples:
+            ts, top, bottom, heater_w, _ = sample
+            heater_off = heater_w is not None and heater_w <= min_heater_watts
+            if not heater_off:
+                close()
+                continue
+            if settle_until and ts < settle_until:
+                continue
+            if current and ts - current[-1][0] > max_gap:
+                close()
+
+            # Look for a sudden change compared with the samples over the last few minutes.
+            # A sudden drop means hot water was drawn off (cold water enters the bottom of the tank).
+            # A sudden rise means the tank was heated by something we can't see (E.G the indirect coil).
+            sudden_change = False
+            for prev in current:
+                if ts - prev[0] <= HotWaterTank.DRAW_OFF_WINDOW:
+                    if abs(prev[1] - top) >= HotWaterTank.DRAW_OFF_DROP_C or abs(prev[2] - bottom) >= HotWaterTank.DRAW_OFF_DROP_C:
+                        sudden_change = True
+                        break
+            if sudden_change:
+                # Discard the samples since the change started and wait for the tank to settle.
+                cut_time = ts - HotWaterTank.DRAW_OFF_WINDOW
+                while current and current[-1][0] >= cut_time:
+                    current.pop()
+                close()
+                settle_until = ts + HotWaterTank.SETTLE_TIME
+                continue
+
+            current.append(sample)
+        close()
+        return periods
+
+    def heat_loss(self, samples, min_heater_watts):
+        """@brief Estimate the tank heat loss from the periods when it was cooling.
+           @param samples A list of samples as returned by TankTempHistory.get().
+           @param min_heater_watts Below this power the heater is off.
+           @return None if there is not enough data, else a dict with
+                   cooling_c_per_hour   The typical rate the tank cools (°C/hour) at mean_tank_c.
+                   mean_tank_c          The average tank temperature over the cooling periods.
+                   w_per_k              Heat loss in watts per °C difference between tank and room.
+                   standard_kwh_per_day Heat loss in kWh/24h at a 45 °C difference (as on cylinder labels).
+                   periods              The cooling periods used (list of (start, stop) datetimes)."""
+        results = []
+        for period in self.find_cooling_periods(samples, min_heater_watts):
+            t0 = period[0][0]
+            xs = [(s[0] - t0).total_seconds() / 3600.0 for s in period]
+            ys = [(s[1] + s[2]) / 2.0 for s in period]
+            n = len(xs)
+            mean_x = sum(xs) / n
+            mean_y = sum(ys) / n
+            sxx = sum((x - mean_x) ** 2 for x in xs)
+            if sxx == 0:
+                continue
+            slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / sxx     # °C per hour
+            delta_k = mean_y - self.ambient_c
+            # Ignore periods where the tank warmed or is too close to room temperature to measure.
+            if slope >= 0 or delta_k < HotWaterTank.MIN_LOSS_DELTA_K:
+                continue
+            watts = self.volume_litres * HotWaterTank.KWH_PER_LITRE_KELVIN * (-slope) * 1000.0
+            results.append({'slope': slope,
+                            'mean_c': mean_y,
+                            'w_per_k': watts / delta_k,
+                            'period': (period[0][0], period[-1][0])})
+
+        if not results:
+            return None
+        results = results[-HotWaterTank.MAX_LOSS_PERIODS:]
+
+        def median(values):
+            values = sorted(values)
+            return values[len(values) // 2]
+
+        w_per_k = median([r['w_per_k'] for r in results])
+        return {'cooling_c_per_hour': -median([r['slope'] for r in results]),
+                'mean_tank_c': median([r['mean_c'] for r in results]),
+                'w_per_k': w_per_k,
+                'standard_kwh_per_day': w_per_k * HotWaterTank.STANDARD_LOSS_DELTA_K * 24.0 / 1000.0,
+                'periods': [r['period'] for r in results]}
+
+
 class ClientView(object):
     """@brief Holds the GUI elements for one browser connection.
               Each browser (E.G a phone and a PC) gets its own set so they don't interfere with each other.
@@ -920,6 +1073,15 @@ class ClientView(object):
         self._zappi_max_charge_rate = None
         self._zappi_serial_number = None
         self._buttonList = []
+        self._stats_age_label = None
+        self._hot_water_label = None
+        self._heat_loss_label = None
+        self._tank_volume_input = None
+        self._cold_water_temp_input = None
+        self._use_temp_input = None
+        self._shower_litres_input = None
+        self._tank_ambient_temp_input = None
+        self._tank_temps_stale = None       # Whether the temperatures are currently shown as out of date
         self.queue = Queue()
 
 
@@ -939,6 +1101,11 @@ class GUIServer(object):
     CLEAR_ZAPPI_SCHEDULE_TIME = "CLEAR_ZAPPI_SCHEDULE_TIME"
     CLEAR_EDDI_SCHEDULE_TIME = "CLEAR_EDDI_SCHEDULE_TIME"
     UNDERSHOOT_CHARGE = "UNDERSHOOT_CHARGE"
+    TANK_VOLUME_LITRES = "TANK_VOLUME_LITRES"
+    COLD_WATER_TEMP_C = "COLD_WATER_TEMP_C"
+    HOT_WATER_USE_TEMP_C = "HOT_WATER_USE_TEMP_C"
+    SHOWER_LITRES = "SHOWER_LITRES"
+    TANK_AMBIENT_TEMP_C = "TANK_AMBIENT_TEMP_C"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -953,7 +1120,24 @@ class GUIServer(object):
                       READY_BY: "",
                       CLEAR_ZAPPI_SCHEDULE_TIME: "",
                       CLEAR_EDDI_SCHEDULE_TIME: "",
-                      UNDERSHOOT_CHARGE: False}
+                      UNDERSHOOT_CHARGE: False,
+                      TANK_VOLUME_LITRES: 162,      # A 1200 x 450 mm cylinder
+                      COLD_WATER_TEMP_C: 10,
+                      HOT_WATER_USE_TEMP_C: 40,
+                      SHOWER_LITRES: 60,            # Litres at the use temperature, E.G 8 minutes at 7.5 litres/min
+                      TANK_AMBIENT_TEMP_C: 20}
+
+    # (config key, label, min, max, tooltip) for the hot water tank settings
+    TANK_SETTINGS = ((TANK_VOLUME_LITRES, 'Tank volume (litres)', 20, 1000,
+                      "The capacity of the hot water cylinder. It is often on the cylinder label."),
+                     (COLD_WATER_TEMP_C, 'Cold water (°C)', 0, 30,
+                      "The temperature of the cold water that refills the tank."),
+                     (HOT_WATER_USE_TEMP_C, 'Use temperature (°C)', 30, 60,
+                      "The temperature hot water is used at, E.G a shower."),
+                     (SHOWER_LITRES, 'Shower (litres)', 5, 500,
+                      "The litres of water at the use temperature used by one shower."),
+                     (TANK_AMBIENT_TEMP_C, 'Room temperature at the tank (°C)', -10, 40,
+                      "The air temperature around the tank. Used to work out the heat loss."))
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
@@ -966,7 +1150,6 @@ class GUIServer(object):
     BOOST_1_ON = "BOOST_1_SET_ON"
     BOOST_2_ON = "BOOST_2_SET_ON"
     BOOST_OFF = "BOOST_OFF"
-    TANK_TEMPERATURES = "TANK_TEMPERATURES"
     INFO_MESSAGE = "INFO_MESSAGE"
     ERROR_MESSAGE = "ERROR_MESSAGE"
     WARNING_MESSAGE = "WARNING_MESSAGE"
@@ -1046,6 +1229,10 @@ class GUIServer(object):
     DEFAULT_TEMP_PLOT_PERIOD = "24 hours"
     TEMP_PLOT_AUTO_REFRESH_SECONDS = 60
     HOUSEKEEPING_SECONDS = 10
+    STATS_STALE_SECONDS = 180                       # Readings older than this are shown as out of date.
+    STATS_AGE_UPDATE_SECONDS = 1.0                  # How often the reading age shown on the EDDI tab is updated.
+    STALE_TEXT_COLOR = 'gray'
+    STALE_WARNING_COLOR = 'orange'
 
     @staticmethod
     def Print_Exception():
@@ -1065,6 +1252,9 @@ class GUIServer(object):
         self._heater_load_watts = 0
         self._zappi_charge_watts = 0
         self._relay_on = 0
+        # The latest tank temperatures read from the myenergi server: (top °C, bottom °C, datetime read)
+        # or None if not read yet. Shared by all browser connections.
+        self._latest_tank_temps = None
         self._eddi_heater_button_selected = 0
         self._charge_slot_dict_list = None
         self._octopus_agile_tariff = True
@@ -1170,6 +1360,10 @@ class GUIServer(object):
         octopus_agile_tariff = self._is_octopus_agile_tariff_enabled()
 
         # Check the fields that don't need network access first.
+        tank_values = self._get_tank_setting_values()
+        if tank_values is None:
+            return False
+
         if len(api_key) > 0 and len(zappi_serial_number) > 0:
             if float(ev_kwh or 0) <= 0:
                 ui.notify("EV battery capacity must be greater than 0 kWh.", type='negative')
@@ -1211,6 +1405,8 @@ class GUIServer(object):
             self._cfg_mgr.addAttr(GUIServer.OCTOPUS_AGILE_TARIFF, octopus_agile_tariff)
             self._cfg_mgr.addAttr(GUIServer.TARIFF_POINT_LIST, self._other_tariff_values)
 
+        for key, value in tank_values.items():
+            self._cfg_mgr.addAttr(key, value)
         self._save_charge_fields()
         ui.notify(f"Saved to {self._cfg_mgr._getConfigFile()}")
         return True
@@ -1451,11 +1647,6 @@ class GUIServer(object):
                 self._set_zappi_charge_active(False)
                 self._w._clear_zappi_button.enable()
 
-        elif GUIServer.TANK_TEMPERATURES in rxDict:
-            top_tank_temp, bottom_tank_temp = rxDict[GUIServer.TANK_TEMPERATURES]
-            self._w._topTankTempLabel.text = top_tank_temp
-            self._w._bottomTankTempLabel.text = bottom_tank_temp
-
         elif GUIServer.ZAPPI_CHARGE_SCHEDULE in rxDict:
             zappi_charge_table = rxDict[GUIServer.ZAPPI_CHARGE_SCHEDULE]
             self._display_zappi_charge_table(zappi_charge_table)
@@ -1494,6 +1685,13 @@ class GUIServer(object):
                 ui.label('°C')
                 self._w._topTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
                 self._w._bottomTankTempLabel = ui.label("").style(GUIServer.TEXT_STYLE_B)
+        with ui.row():
+            self._w._hot_water_label = ui.label("").style(GUIServer.TEXT_STYLE_C)
+            self._w._hot_water_label.tooltip("An estimate from the top and bottom tank temperatures and the hot water tank settings in the SETTINGS tab.")
+        with ui.row():
+            self._w._stats_age_label = ui.label("").style(GUIServer.TEXT_STYLE_C)
+        self._show_tank_temps()
+        ui.timer(interval=GUIServer.STATS_AGE_UPDATE_SECONDS, callback=self._show_tank_temps)
         html.hr()
 
         with ui.row():
@@ -1664,6 +1862,92 @@ class GUIServer(object):
             eddi_config_set = True
         return eddi_config_set
 
+    def _get_tank_setting_values(self):
+        """@brief Read and check the hot water tank fields on the settings tab.
+           @return A dict of config key: value or None if a value is invalid (the user is told why)."""
+        inputs = {GUIServer.TANK_VOLUME_LITRES: self._w._tank_volume_input,
+                  GUIServer.COLD_WATER_TEMP_C: self._w._cold_water_temp_input,
+                  GUIServer.HOT_WATER_USE_TEMP_C: self._w._use_temp_input,
+                  GUIServer.SHOWER_LITRES: self._w._shower_litres_input,
+                  GUIServer.TANK_AMBIENT_TEMP_C: self._w._tank_ambient_temp_input}
+        values = {}
+        for key, label, min_value, max_value, _ in GUIServer.TANK_SETTINGS:
+            value = inputs[key].value
+            if value is None or value < min_value or value > max_value:
+                ui.notify(f"{label} must be between {min_value} and {max_value}.", type='negative')
+                return None
+            values[key] = value
+        if values[GUIServer.HOT_WATER_USE_TEMP_C] <= values[GUIServer.COLD_WATER_TEMP_C]:
+            ui.notify("The use temperature must be higher than the cold water temperature.", type='negative')
+            return None
+        return values
+
+    def _get_hot_water_tank(self):
+        """@return A HotWaterTank instance built from the saved settings."""
+        return HotWaterTank(float(self._cfg_mgr.getAttr(GUIServer.TANK_VOLUME_LITRES)),
+                            float(self._cfg_mgr.getAttr(GUIServer.COLD_WATER_TEMP_C)),
+                            float(self._cfg_mgr.getAttr(GUIServer.HOT_WATER_USE_TEMP_C)),
+                            float(self._cfg_mgr.getAttr(GUIServer.SHOWER_LITRES)),
+                            float(self._cfg_mgr.getAttr(GUIServer.TANK_AMBIENT_TEMP_C)))
+
+    def _set_latest_tank_temps(self, top_temp, bottom_temp):
+        """@brief Record the tank temperatures just read from the myenergi server and when they were read.
+                  Called from worker threads. A single assignment so no lock is needed."""
+        self._latest_tank_temps = (top_temp, bottom_temp, datetime.now())
+
+    @staticmethod
+    def GET_AGE_STRING(age_seconds):
+        """@return A short human readable string for an age in seconds."""
+        if age_seconds < 60:
+            return f"{int(age_seconds)} s"
+        if age_seconds < 3600:
+            return f"{int(age_seconds // 60)} min"
+        return f"{age_seconds / 3600:.1f} hours"
+
+    def _show_tank_temps(self):
+        """@brief Called every second (per browser) to show the latest tank temperatures and how old they are.
+                  If no new readings have been received for GUIServer.STATS_STALE_SECONDS the temperatures
+                  are greyed out and a warning is shown, so out of date values are not mistaken for current ones."""
+        w = self._w
+        latest = self._latest_tank_temps
+        if latest is None:
+            w._topTankTempLabel.text = "--"
+            w._bottomTankTempLabel.text = "--"
+            w._hot_water_label.text = ""
+            if self._is_eddi_config_entered():
+                w._stats_age_label.text = "Waiting for data from myenergi..."
+            else:
+                w._stats_age_label.text = "Enter your myenergi details in the SETTINGS tab."
+            return
+
+        top_temp, bottom_temp, read_time = latest
+        w._topTankTempLabel.text = str(top_temp)
+        w._bottomTankTempLabel.text = str(bottom_temp)
+        try:
+            tank = self._get_hot_water_tank()
+            showers = tank.showers(top_temp, bottom_temp)
+            w._hot_water_label.text = (f"≈ {tank.stored_kwh(top_temp, bottom_temp):.1f} kWh stored, "
+                                       f"{tank.litres_at_use_temp(top_temp, bottom_temp):.0f} litres at {tank.use_temp_c:.0f} °C "
+                                       f"(≈ {showers:.1f} shower{'' if round(showers, 1) == 1 else 's'})")
+        except Exception as ex:
+            w._hot_water_label.text = f"Hot water estimate unavailable: {str(ex)}"
+        age_seconds = max(0.0, (datetime.now() - read_time).total_seconds())
+        stale = age_seconds > GUIServer.STATS_STALE_SECONDS
+        if stale:
+            when = read_time.strftime('%H:%M') if read_time.date() == datetime.now().date() else read_time.strftime('%H:%M on %d %b')
+            w._stats_age_label.text = f"No new data from myenergi for {GUIServer.GET_AGE_STRING(age_seconds)} (last read at {when})."
+        else:
+            w._stats_age_label.text = f"Updated {GUIServer.GET_AGE_STRING(age_seconds)} ago"
+
+        # Only restyle when the state changes.
+        if stale != w._tank_temps_stale:
+            w._tank_temps_stale = stale
+            temp_color = GUIServer.STALE_TEXT_COLOR if stale else 'lightgreen'
+            w._topTankTempLabel.style(f'color: {temp_color};')
+            w._bottomTankTempLabel.style(f'color: {temp_color};')
+            w._stats_age_label.style(f'color: {GUIServer.STALE_WARNING_COLOR if stale else "lightgreen"};')
+            w._hot_water_label.style(f'color: {temp_color};')
+
     def _update_stats(self):
         """@brief Update the stats read from the network.
                   This should not be called in the GUI thread as it will block if there are network issues."""
@@ -1672,6 +1956,7 @@ class GUIServer(object):
                 self._my_energi.update_stats()
                 top_temp = self._my_energi.get_eddi_top_tank_temp()
                 bottom_temp = self._my_energi.get_eddi_bottom_tank_temp()
+                self._set_latest_tank_temps(top_temp, bottom_temp)
                 self._heater_load_watts = self._my_energi.get_eddi_heater_watts()
                 try:
                     self._zappi_charge_watts = self._my_energi.get_zappi_charge_watts()
@@ -1682,9 +1967,6 @@ class GUIServer(object):
                     if len(zappi_serial_number) > 0:
                         raise
                 self._relay_on = self._my_energi.get_eddi_heater_number()
-                msg_dict = {}
-                msg_dict[GUIServer.TANK_TEMPERATURES] = [top_temp, bottom_temp]
-                self._update_gui(msg_dict)
         except Exception as ex:
             GUIServer.Print_Exception()
             msg_dict = {}
@@ -1731,6 +2013,21 @@ class GUIServer(object):
         with ui.row():
             self._w._add_tariff_value_button = ui.button('Add', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._add_tariff_value)
             self._w._clear_tariff_value_button = ui.button('Clear', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._clear_tariff)
+
+        html.hr()
+        ui.label('Hot water tank').style(GUIServer.TEXT_STYLE_A_SIZE)
+        tank_inputs = {}
+        for key, label, min_value, max_value, tooltip in GUIServer.TANK_SETTINGS:
+            with ui.row():
+                tank_inputs[key] = ui.number(label=label,
+                                             value=self._cfg_mgr.getAttr(key),
+                                             min=min_value,
+                                             max=max_value).style("width: 300px;").tooltip(tooltip)
+        self._w._tank_volume_input = tank_inputs[GUIServer.TANK_VOLUME_LITRES]
+        self._w._cold_water_temp_input = tank_inputs[GUIServer.COLD_WATER_TEMP_C]
+        self._w._use_temp_input = tank_inputs[GUIServer.HOT_WATER_USE_TEMP_C]
+        self._w._shower_litres_input = tank_inputs[GUIServer.SHOWER_LITRES]
+        self._w._tank_ambient_temp_input = tank_inputs[GUIServer.TANK_AMBIENT_TEMP_C]
 
         with ui.row():
             self._w._config_save_button = ui.button('Save', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._save_config_button_selected)
@@ -2749,6 +3046,7 @@ class GUIServer(object):
                     my_energi.update_stats()
                     top_temp = my_energi.get_eddi_top_tank_temp()
                     bottom_temp = my_energi.get_eddi_bottom_tank_temp()
+                    self._set_latest_tank_temps(top_temp, bottom_temp)
                     # Don't lose the temperatures if the heater stats are missing.
                     try:
                         heater_w = my_energi.get_eddi_heater_watts()
@@ -2777,6 +3075,11 @@ class GUIServer(object):
 
         with ui.row().classes('w-full'):
             self._w._temp_plot_container = ui.element('div').classes('w-full')
+        with ui.row():
+            self._w._heat_loss_label = ui.label("").style(GUIServer.TEXT_STYLE_C + " white-space: pre-line;")
+            self._w._heat_loss_label.tooltip("Worked out from periods of at least 3 hours with the heaters off and no hot water used "
+                                             "(shown as a grey bar along the bottom of the plot). It uses the average of the top and "
+                                             "bottom temperatures, so treat it as an estimate.")
 
         self._plot_tank_temps()
         # Keep the plot up to date while the page is open.
@@ -2839,6 +3142,27 @@ class GUIServer(object):
             runs.append(tuple(current))
         return runs
 
+    def _show_heat_loss(self, tank, heat_loss, top_temp, bottom_temp):
+        """@brief Show the tank heat loss on the TEMPS tab.
+           @param tank A HotWaterTank instance.
+           @param heat_loss The dict returned by HotWaterTank.heat_loss() or None.
+           @param top_temp The latest top tank temperature.
+           @param bottom_temp The latest bottom tank temperature."""
+        label = self._w._heat_loss_label
+        if label is None:
+            return
+        if heat_loss is None:
+            label.text = ("Heat loss: not enough data yet. This needs a period of at least "
+                          f"{HotWaterTank.MIN_LOSS_PERIOD_HOURS:.0f} hours with the heaters off and no hot water used.")
+            return
+        now_delta_k = max(0.0, (top_temp + bottom_temp) / 2.0 - tank.ambient_c)
+        now_watts = heat_loss['w_per_k'] * now_delta_k
+        count = len(heat_loss['periods'])
+        label.text = (f"Heat loss: cools ≈ {heat_loss['cooling_c_per_hour']:.2f} °C/hour at {heat_loss['mean_tank_c']:.0f} °C.\n"
+                      f"Now ≈ {now_watts:.0f} W ({now_watts * 24 / 1000:.1f} kWh/day). "
+                      f"≈ {heat_loss['standard_kwh_per_day']:.2f} kWh/24h at 45 K, comparable with the cylinder label.\n"
+                      f"From {count} cooling period{'' if count == 1 else 's'}, assuming the room is {tank.ambient_c:.0f} °C.")
+
     def _plot_tank_temps(self):
         """@brief Plot the recorded top and bottom tank temperatures, shading the periods
                   when each immersion heater was on and whether it was powered by solar or mains."""
@@ -2851,6 +3175,8 @@ class GUIServer(object):
             with self._w._temp_plot_container:
                 if len(samples) == 0:
                     ui.label("No tank temperatures recorded yet.").style(GUIServer.TEXT_STYLE_C)
+                    if self._w._heat_loss_label:
+                        self._w._heat_loss_label.text = ""
                     return
 
                 ts_list = [s[0] for s in samples]
@@ -2886,6 +3212,17 @@ class GUIServer(object):
                                       zerolinecolor="gray",
                                       range=[y_min, y_max]
                                   ),)
+
+                # Heat loss uses all the recorded history, not just the period being displayed.
+                tank = self._get_hot_water_tank()
+                heat_loss = tank.heat_loss(self._tank_temp_history.get(24 * 366), GUIServer.MIN_HEATER_WATTS)
+                self._show_heat_loss(tank, heat_loss, top_list[-1], bottom_list[-1])
+                if heat_loss:
+                    # Mark the periods used to work out the heat loss along the bottom of the plot.
+                    for start, stop in heat_loss['periods']:
+                        fig.add_shape(type="rect", xref="x", yref="y domain",
+                                      x0=start, x1=stop, y0=0.0, y1=0.03,
+                                      fillcolor='lightgray', opacity=0.8, line_width=0)
 
                 heater_on_mins = {GUIServer.HEATER_SOURCE_SOLAR: 0.0, GUIServer.HEATER_SOURCE_MAINS: 0.0}
                 if self._w._heater_shade_checkbox is None or self._w._heater_shade_checkbox.value:
