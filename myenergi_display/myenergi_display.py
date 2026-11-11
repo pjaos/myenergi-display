@@ -1017,7 +1017,7 @@ class GUIServer(object):
     HEATER_SOURCE_MAINS = 2
     # Shading used on the tank temperature plot. Colours match the EDDI tab boost buttons.
     HEATER_SHADE_COLORS = {HEATER_SOURCE_SOLAR: 'yellow',
-                           HEATER_SOURCE_MAINS: 'green'}
+                           HEATER_SOURCE_MAINS: '#21BA45'}    # Quasar's 'green', as used by the EDDI buttons
     HEATER_SHADE_OPACITY = 0.3
 
     ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT = "ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT"
@@ -1720,9 +1720,9 @@ class GUIServer(object):
                                              on_change=self._tariff_changed,
                                              value=GUIServer.TARIFF_LIST[0])
 
-        with ui.row():
+        with ui.row().classes('w-full'):
             # A plot of energy costs is added to this container when the users requests it
-            self._w._other_tariff_plot_container = ui.element('div')
+            self._w._other_tariff_plot_container = ui.element('div').classes('w-full')
 
         with ui.row():
             self._w._undershoot_checkbox = ui.checkbox('Undershoot').tooltip("Charge times are in 15 min increments. Therefore the charge may be slightly longer "
@@ -1931,7 +1931,7 @@ class GUIServer(object):
             fig = go.Figure()
             max_cost = max(prices)
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
-                              width=350,
+                              autosize=True,
                               height=150,
                               showlegend=False,
                               plot_bgcolor="black",       # Background for the plot area
@@ -1956,7 +1956,7 @@ class GUIServer(object):
                 self._w._other_tariff_plot_container.clear()
                 # Add the new plot to the container
                 with self._w._other_tariff_plot_container:
-                    ui.plotly(fig)
+                    ui.plotly(fig).classes('w-full')
 
         except Exception as ex:
             GUIServer.Print_Exception()
@@ -2043,9 +2043,9 @@ class GUIServer(object):
 
         self._w._free_energy_checkbox = ui.checkbox('Free energy period')
 
-        with ui.row():
+        with ui.row().classes('w-full'):
             # A plot of energy costs is added to this container when the users requests it
-            self._w._plot_container = ui.element('div')
+            self._w._plot_container = ui.element('div').classes('w-full')
 
         with ui.row():
             self._w._calc_button = ColorButton(self._calc_cost_initial_step, 'Calc')
@@ -2517,7 +2517,7 @@ class GUIServer(object):
             if min_cost > 0:
                 min_cost = 0
             fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
-                              width=350,
+                              autosize=True,
                               height=200,
                               showlegend=False,
                               plot_bgcolor="black",       # Background for the plot area
@@ -2543,7 +2543,7 @@ class GUIServer(object):
 
             # Add the new plot to the container
             with self._w._plot_container:
-                ui.plotly(fig)
+                ui.plotly(fig).classes('w-full')
 
             with self._w._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
@@ -2775,8 +2775,8 @@ class GUIServer(object):
             self._w._heater_shade_checkbox.tooltip("Shade when the immersion heaters were on. Upper half = top heater, lower half = bottom heater. "
                                                    "Yellow = solar, green = mains.")
 
-        with ui.row():
-            self._w._temp_plot_container = ui.element('div')
+        with ui.row().classes('w-full'):
+            self._w._temp_plot_container = ui.element('div').classes('w-full')
 
         self._plot_tank_temps()
         # Keep the plot up to date while the page is open.
@@ -2799,8 +2799,14 @@ class GUIServer(object):
                   Consecutive samples with the same heater and power source are merged into one period.
            @param samples A list of samples as returned by TankTempHistory.get().
            @return A list of (start datetime, stop datetime, heater number, heater source) tuples."""
-        record_seconds = self._get_cmd_line_int(GUIServer.TANK_TEMP_RECORD_SECONDS_INT, GUIServer.DEFAULT_TANK_TEMP_RECORD_SECONDS)
-        sample_period = timedelta(seconds=record_seconds)
+        # Use the typical (median) spacing of the samples rather than the configured recording interval.
+        # This copes with the interval being changed and with slow responses from the myenergi server.
+        gaps = sorted(samples[i + 1][0] - samples[i][0] for i in range(len(samples) - 1))
+        if gaps:
+            sample_period = gaps[len(gaps) // 2]
+        else:
+            record_seconds = self._get_cmd_line_int(GUIServer.TANK_TEMP_RECORD_SECONDS_INT, GUIServer.DEFAULT_TANK_TEMP_RECORD_SECONDS)
+            sample_period = timedelta(seconds=record_seconds)
         # If the gap to the next sample is larger than this the recorder was not running,
         # so assume the heater state only lasted for one sample period.
         max_gap = sample_period * 3
@@ -2859,7 +2865,7 @@ class GUIServer(object):
 
                 fig = go.Figure()
                 fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
-                                  width=350,
+                                  autosize=True,
                                   height=250,
                                   showlegend=True,
                                   legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0),
@@ -2897,7 +2903,7 @@ class GUIServer(object):
 
                 fig.add_trace(go.Scatter(x=ts_list, y=top_list, mode='lines', name='Top', line=dict(color='orangered', width=2)))
                 fig.add_trace(go.Scatter(x=ts_list, y=bottom_list, mode='lines', name='Bottom', line=dict(color='deepskyblue', width=2)))
-                ui.plotly(fig)
+                ui.plotly(fig).classes('w-full')
                 ui.label(f"Now: top {top_list[-1]:.0f} °C, bottom {bottom_list[-1]:.0f} °C "
                          f"(at {ts_list[-1].strftime('%H:%M')})").style(GUIServer.TEXT_STYLE_C)
                 if self._w._heater_shade_checkbox is None or self._w._heater_shade_checkbox.value:
