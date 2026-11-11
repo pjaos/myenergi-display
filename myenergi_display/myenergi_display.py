@@ -5,6 +5,8 @@
 # used in this project.
 
 import argparse
+import os
+import csv
 import threading
 import requests
 import traceback
@@ -28,7 +30,7 @@ from p3lib.pconfig import DotConfigManager
 from p3lib.boot_manager import BootManager
 from p3lib.ngt import TabbedNiceGui, YesNoDialog
 
-from nicegui import ui, html
+from nicegui import ui, html, app
 
 
 class MyEnergi(object):
@@ -703,6 +705,142 @@ class RegionalElectricity(object):
         return (timeStampList, costList, end_charge_datetime)
 
 
+class TankTempHistory(object):
+    """@brief Responsible for holding a rolling history of the hot water tank temperatures
+              and immersion heater state and persisting it to a CSV file so that it survives a restart.
+
+              Each sample is a tuple
+              0 = timestamp (timezone aware datetime)
+              1 = top tank temperature (°C)
+              2 = bottom tank temperature (°C)
+              3 = heater power (W) or None if not known
+              4 = heater number (1 = top, 2 = bottom) or None if not known"""
+    CSV_HEADER = ("timestamp", "top_c", "bottom_c", "heater_w", "heater_no")
+
+    def __init__(self, filename, max_age_hours, uio=None):
+        """@brief Constructor
+           @param filename The CSV file that the samples are stored in.
+           @param max_age_hours Samples older than this are discarded.
+           @param uio A UIO instance."""
+        self._filename = filename
+        self._max_age = timedelta(hours=max_age_hours)
+        self._uio = uio
+        self._lock = threading.Lock()
+        self._samples = []
+        self._last_file_rewrite = None
+        self._load()
+
+    def _debug(self, msg):
+        if self._uio:
+            self._uio.debug(f"TankTempHistory: {msg}")
+
+    @staticmethod
+    def _optional_number(text, convert):
+        """@return The text converted to a number or None if empty/invalid."""
+        try:
+            return convert(text) if text not in (None, "") else None
+        except ValueError:
+            return None
+
+    def _load(self):
+        """@brief Load the history from the CSV file (if present) and drop old samples.
+                  Files written before heater power was recorded (3 columns) are still read."""
+        samples = []
+        if os.path.isfile(self._filename):
+            try:
+                with open(self._filename, 'r', newline='') as fd:
+                    for row in csv.reader(fd):
+                        if len(row) not in (3, 5) or row[0] == TankTempHistory.CSV_HEADER[0]:
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(row[0])
+                            top = float(row[1])
+                            bottom = float(row[2])
+                        except ValueError:
+                            # Ignore corrupt lines (E.G a partly written line after a power cut)
+                            continue
+                        heater_w = heater_no = None
+                        if len(row) == 5:
+                            heater_w = TankTempHistory._optional_number(row[3], float)
+                            heater_no = TankTempHistory._optional_number(row[4], int)
+                        samples.append((ts, top, bottom, heater_w, heater_no))
+            except Exception as ex:
+                if self._uio:
+                    self._uio.error(f"Failed to read {self._filename}: {str(ex)}")
+        with self._lock:
+            self._samples = samples
+            self._prune()
+        # Rewrite the file so that it only holds the samples we've kept (in the current format).
+        self._rewrite_file()
+        self._debug(f"Loaded {len(self._samples)} tank samples from {self._filename}")
+
+    def _prune(self):
+        """@brief Remove samples older than the max age. The lock must be held by the caller."""
+        oldest_allowed = datetime.now().astimezone() - self._max_age
+        self._samples = [s for s in self._samples if s[0] >= oldest_allowed]
+
+    @staticmethod
+    def _to_row(sample):
+        """@return A CSV row for a sample."""
+        ts, top, bottom, heater_w, heater_no = sample
+        return (ts.isoformat(timespec='seconds'),
+                f"{top:.1f}",
+                f"{bottom:.1f}",
+                "" if heater_w is None else f"{heater_w:.0f}",
+                "" if heater_no is None else str(heater_no))
+
+    def _rewrite_file(self):
+        """@brief Write all the held samples to the CSV file."""
+        with self._lock:
+            samples = list(self._samples)
+        tmp_file = self._filename + ".tmp"
+        with open(tmp_file, 'w', newline='') as fd:
+            writer = csv.writer(fd)
+            writer.writerow(TankTempHistory.CSV_HEADER)
+            for sample in samples:
+                writer.writerow(TankTempHistory._to_row(sample))
+        # Atomic replace so a crash can't leave us with a half written file.
+        os.replace(tmp_file, self._filename)
+        self._last_file_rewrite = datetime.now()
+
+    def add(self, top_c, bottom_c, heater_w=None, heater_no=None):
+        """@brief Add a sample (timestamped now).
+           @param top_c The top tank temperature in °C.
+           @param bottom_c The bottom tank temperature in °C.
+           @param heater_w The immersion heater power in watts or None if not known.
+           @param heater_no The heater that was last on (1 = top, 2 = bottom) or None if not known."""
+        ts = datetime.now().astimezone().replace(microsecond=0)
+        sample = (ts,
+                  float(top_c),
+                  float(bottom_c),
+                  None if heater_w is None else float(heater_w),
+                  None if heater_no is None else int(heater_no))
+        with self._lock:
+            self._samples.append(sample)
+            self._prune()
+
+        # Append to the file. Once an hour rewrite it to drop old samples so it does not grow forever.
+        if self._last_file_rewrite is None or datetime.now() - self._last_file_rewrite > timedelta(hours=1):
+            self._rewrite_file()
+        else:
+            with open(self._filename, 'a', newline='') as fd:
+                csv.writer(fd).writerow(TankTempHistory._to_row(sample))
+
+    def get(self, hours):
+        """@brief Get the samples recorded over the last N hours.
+           @param hours The number of hours of history required.
+           @return A list of sample tuples (see class description), oldest first."""
+        oldest = datetime.now().astimezone() - timedelta(hours=hours)
+        with self._lock:
+            return [s for s in self._samples if s[0] >= oldest]
+
+    def clear(self):
+        """@brief Delete all recorded samples."""
+        with self._lock:
+            self._samples = []
+        self._rewrite_file()
+
+
 class GUIServer(object):
 
     MYENERGI_API_KEY = 'MYENERGI_API_KEY'
@@ -792,15 +930,39 @@ class GUIServer(object):
 
     MAX_HEATER_WATTS = 2500
     MIN_HEATER_WATTS = 100
+    HEATER_SOURCE_NONE = 0
+    HEATER_SOURCE_SOLAR = 1
+    HEATER_SOURCE_MAINS = 2
+    # Shading used on the tank temperature plot. Colours match the EDDI tab boost buttons.
+    HEATER_SHADE_COLORS = {HEATER_SOURCE_SOLAR: 'yellow',
+                           HEATER_SOURCE_MAINS: 'green'}
+    HEATER_SHADE_OPACITY = 0.3
 
     ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT = "ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT"
     CMD_LINE_CONFIG_FILENAME = "myenergi_display_command_line.cfg"
+    TANK_TEMP_RECORD_SECONDS_INT = "TANK_TEMP_RECORD_SECONDS_INT"
+    TANK_TEMP_HISTORY_DAYS_INT = "TANK_TEMP_HISTORY_DAYS_INT"
+    DEFAULT_TANK_TEMP_RECORD_SECONDS = 60
+    DEFAULT_TANK_TEMP_HISTORY_DAYS = 7
     DEFAULT_CMD_LINE_CONFIG = {
         ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT: "1.0",
+        TANK_TEMP_RECORD_SECONDS_INT: DEFAULT_TANK_TEMP_RECORD_SECONDS,
+        TANK_TEMP_HISTORY_DAYS_INT: DEFAULT_TANK_TEMP_HISTORY_DAYS,
     }
     CMD_LINE_CONFIG_ATTR_DICT = {
         ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT: ConfigAttrDetails("Enter the ZAPPI charge adjustment factor (default = 1.0)", 0.0, 3.0),
+        TANK_TEMP_RECORD_SECONDS_INT: ConfigAttrDetails(f"Enter the seconds between tank temperature recordings (default = {DEFAULT_TANK_TEMP_RECORD_SECONDS})", 30, 3600),
+        TANK_TEMP_HISTORY_DAYS_INT: ConfigAttrDetails(f"Enter the number of days of tank temperature history to keep (default = {DEFAULT_TANK_TEMP_HISTORY_DAYS})", 1, 366),
     }
+
+    TANK_TEMP_HISTORY_FILENAME = "myenergi_display_tank_temps.csv"
+    # Selectable plot periods (label -> hours)
+    TEMP_PLOT_PERIODS = {"6 hours": 6,
+                         "24 hours": 24,
+                         "3 days": 72,
+                         "7 days": 168}
+    DEFAULT_TEMP_PLOT_PERIOD = "24 hours"
+    TEMP_PLOT_AUTO_REFRESH_SECONDS = 60
 
     @staticmethod
     def Print_Exception():
@@ -837,6 +999,16 @@ class GUIServer(object):
         self._boost_time_value = None
         self._cmd_line_config_manager = ConfigManager(self._uio, GUIServer.CMD_LINE_CONFIG_FILENAME, GUIServer.DEFAULT_CMD_LINE_CONFIG)
         self._cmd_line_config_manager.load(self)
+
+        # Tank temperature recording
+        self._temp_plot_container = None
+        self._temp_period_select = None
+        self._heater_shade_checkbox = None
+        self._temp_recorder_stop_event = threading.Event()
+        self._temp_recorder_thread = None
+        history_days = self._get_cmd_line_int(GUIServer.TANK_TEMP_HISTORY_DAYS_INT, GUIServer.DEFAULT_TANK_TEMP_HISTORY_DAYS)
+        history_file = os.path.join(DotConfigManager.GetDefaultConfigFolder(), GUIServer.TANK_TEMP_HISTORY_FILENAME)
+        self._tank_temp_history = TankTempHistory(history_file, history_days*24, uio=self._uio)
 
     def _reset_polling_rate(self):
         """@brief This is called to reset the polling rate (set to min delay between reads)."""
@@ -984,6 +1156,10 @@ class GUIServer(object):
            @param show If True show the GUI on startup, ie open a browser window."""
         pageTitle = f"myenergi display (V{TabbedNiceGui.GetProgramVersion()})"
         guiLogLevel = "debug" if nicegui_debug_enabled else "warning"
+        # Start/stop the tank temperature recorder with the server. Using the startup hook (rather than
+        # starting a thread here) ensures only one recorder runs when --reload is used.
+        app.on_startup(self._start_tank_temp_recorder)
+        app.on_shutdown(self._stop_tank_temp_recorder)
         ui.run(root=self._build_page,
                host="0.0.0.0",
                port=self._port,
@@ -999,9 +1175,10 @@ class GUIServer(object):
         self._temp2 = 40
         self._buttonList = []
 
-        tabNameList = ('EDDI', 'ZAPPI', 'SETTINGS')
-        iconList = ('home', 'electric_car', 'settings')
+        tabNameList = ('EDDI', 'TEMPS', 'ZAPPI', 'SETTINGS')
+        iconList = ('home', 'thermostat', 'electric_car', 'settings')
         tabMethodInitList = [self._init_eddi_tab,
+                             self._init_temps_tab,
                              self._init_zappi_tab,
                              self._init_settings_tab]
         tabObjList = []
@@ -1017,6 +1194,19 @@ class GUIServer(object):
 
         ui.timer(interval=GUIServer.GUI_POLL_SECONDS, callback=self._gui_timer_callback)
 
+    @staticmethod
+    def GET_HEATER_SOURCE(heater_watts):
+        """@brief Infer the source of the power to the immersion heater from the power it is taking.
+           @param heater_watts The heater power in watts.
+           @return GUIServer.HEATER_SOURCE_MAINS, GUIServer.HEATER_SOURCE_SOLAR or GUIServer.HEATER_SOURCE_NONE."""
+        source = GUIServer.HEATER_SOURCE_NONE
+        if heater_watts is not None:
+            if heater_watts > GUIServer.MAX_HEATER_WATTS:
+                source = GUIServer.HEATER_SOURCE_MAINS
+            elif heater_watts > GUIServer.MIN_HEATER_WATTS:
+                source = GUIServer.HEATER_SOURCE_SOLAR
+        return source
+
     def _get_heater_power(self, relay):
         """@brief Determine how much power the heater is taking and from this infer the
                   source of the power.
@@ -1024,14 +1214,10 @@ class GUIServer(object):
            @return 2 >= AC Mains
                    1 >= Solar Power
                    0 = No detected power."""
-        detected_power = 0
+        detected_power = GUIServer.HEATER_SOURCE_NONE
         # If the relay of interest is on
         if self._relay_on == relay:
-            if self._heater_load_watts > GUIServer.MAX_HEATER_WATTS:
-                detected_power = 2
-
-            elif self._heater_load_watts > GUIServer.MIN_HEATER_WATTS:
-                detected_power = 1
+            detected_power = GUIServer.GET_HEATER_SOURCE(self._heater_load_watts)
         return detected_power
 
     def _get_zappi_charging(self):
@@ -2253,7 +2439,7 @@ class GUIServer(object):
 
             with self._plot_container:
                 hours_charge_factor = total_charge_mins/60.0
-                charge_adjustment_factor = self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT)
+                charge_adjustment_factor = float(self._cmd_line_config_manager.getAttr(GUIServer.ZAPPI_CHARGE_ADJUSTMENT_FACTOR_FLOAT))
                 kwh = charge_adjustment_factor * (hours_charge_factor*float(self._zappi_max_charge_rate.value))
                 self._target_ev_charge_kwh = kwh
                 battery_charged_percentage = self._target_ev_charge_input.value
@@ -2395,6 +2581,203 @@ class GUIServer(object):
             msg_dict = {}
             msg_dict[GUIServer.ERROR_MESSAGE] = str(ex)
             self._update_gui(msg_dict)
+
+    # ------------------------------------------------------------------------------------------
+    # Tank temperature recording and plotting
+    # ------------------------------------------------------------------------------------------
+
+    def _get_cmd_line_int(self, key, default):
+        """@brief Get an int from the command line config, falling back to a default if invalid.
+           @param key The config key.
+           @param default The value to use if the config value is missing or invalid."""
+        try:
+            return int(self._cmd_line_config_manager.getAttr(key))
+        except Exception:
+            return default
+
+    def _start_tank_temp_recorder(self):
+        """@brief Start the thread that records the tank temperatures.
+                  This runs whether or not a browser is connected so the history has no gaps."""
+        if self._temp_recorder_thread is None:
+            self._temp_recorder_stop_event.clear()
+            self._temp_recorder_thread = threading.Thread(target=self._tank_temp_recorder_thread, daemon=True)
+            self._temp_recorder_thread.start()
+
+    def _stop_tank_temp_recorder(self):
+        """@brief Stop the tank temperature recorder thread."""
+        self._temp_recorder_stop_event.set()
+
+    def _tank_temp_recorder_thread(self):
+        """@brief Periodically read the tank temperatures from the myenergi server and record them."""
+        interval = self._get_cmd_line_int(GUIServer.TANK_TEMP_RECORD_SECONDS_INT, GUIServer.DEFAULT_TANK_TEMP_RECORD_SECONDS)
+        self._info(f"Recording tank temperatures every {interval} seconds.")
+        while not self._temp_recorder_stop_event.is_set():
+            try:
+                if self._is_eddi_config_entered():
+                    # Take a local reference as the MyEnergi instance is replaced if the user saves the settings.
+                    my_energi = self._my_energi
+                    my_energi.update_stats()
+                    top_temp = my_energi.get_eddi_top_tank_temp()
+                    bottom_temp = my_energi.get_eddi_bottom_tank_temp()
+                    # Don't lose the temperatures if the heater stats are missing.
+                    try:
+                        heater_w = my_energi.get_eddi_heater_watts()
+                        heater_no = my_energi.get_eddi_heater_number()
+                    except Exception:
+                        heater_w = heater_no = None
+                    self._tank_temp_history.add(top_temp, bottom_temp, heater_w, heater_no)
+                    self._debug(f"Recorded tank: top={top_temp} °C, bottom={bottom_temp} °C, heater={heater_no} {heater_w} W")
+            except Exception as ex:
+                # Network issues are expected occasionally. Log and carry on, don't bother the GUI user.
+                self._error(f"Failed to record tank temperatures: {str(ex)}")
+            self._temp_recorder_stop_event.wait(interval)
+
+    def _init_temps_tab(self):
+        """@brief Init the tab used to display the tank temperature history."""
+        with ui.row().classes('w-full items-center'):
+            self._temp_period_select = ui.select(options=list(GUIServer.TEMP_PLOT_PERIODS.keys()),
+                                                 value=GUIServer.DEFAULT_TEMP_PLOT_PERIOD,
+                                                 label='Period',
+                                                 on_change=self._plot_tank_temps).style("width: 150px; " + GUIServer.TEXT_STYLE_A_SIZE)
+            ColorButton(self._plot_tank_temps, 'Refresh').tooltip("Update the tank temperature plot.")
+            ColorButton(self._clear_tank_temp_history, 'Clear').tooltip("Delete all recorded tank temperatures.")
+            self._heater_shade_checkbox = ui.checkbox('Heater', value=True, on_change=self._plot_tank_temps)
+            self._heater_shade_checkbox.tooltip("Shade when the immersion heaters were on. Upper half = top heater, lower half = bottom heater. "
+                                                "Yellow = solar, green = mains.")
+
+        with ui.row():
+            self._temp_plot_container = ui.element('div')
+
+        self._plot_tank_temps()
+        # Keep the plot up to date while the page is open.
+        ui.timer(interval=GUIServer.TEMP_PLOT_AUTO_REFRESH_SECONDS, callback=self._plot_tank_temps)
+
+    def _clear_tank_temp_history(self):
+        """@brief Ask the user to confirm before deleting the tank temperature history."""
+        with ui.dialog() as dialog, ui.card():
+            ui.label("Delete all recorded tank temperatures ?")
+            with ui.row().classes('w-full justify-center'):
+                ui.button('Yes', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=lambda: (self._tank_temp_history.clear(),
+                                                                                         dialog.close(),
+                                                                                         self._plot_tank_temps(),
+                                                                                         ui.notify("Tank temperature history deleted.")))
+                ui.button('No', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=dialog.close)
+        dialog.open()
+
+    def _get_heater_runs(self, samples):
+        """@brief Convert the recorded samples into periods when an immersion heater was on.
+                  Consecutive samples with the same heater and power source are merged into one period.
+           @param samples A list of samples as returned by TankTempHistory.get().
+           @return A list of (start datetime, stop datetime, heater number, heater source) tuples."""
+        record_seconds = self._get_cmd_line_int(GUIServer.TANK_TEMP_RECORD_SECONDS_INT, GUIServer.DEFAULT_TANK_TEMP_RECORD_SECONDS)
+        sample_period = timedelta(seconds=record_seconds)
+        # If the gap to the next sample is larger than this the recorder was not running,
+        # so assume the heater state only lasted for one sample period.
+        max_gap = sample_period * 3
+
+        runs = []
+        current = None      # [start, stop, heater_no, source]
+        for index, sample in enumerate(samples):
+            ts, _, _, heater_w, heater_no = sample
+            source = GUIServer.GET_HEATER_SOURCE(heater_w)
+            heater_on = source != GUIServer.HEATER_SOURCE_NONE and heater_no in (MyEnergi.TANK_TOP, MyEnergi.TANK_BOTTOM)
+
+            # The state seen at this sample is assumed to last until the next sample.
+            if index < len(samples) - 1 and samples[index + 1][0] - ts <= max_gap:
+                stop = samples[index + 1][0]
+            else:
+                stop = ts + sample_period
+
+            if heater_on:
+                if current and current[2] == heater_no and current[3] == source and current[1] >= ts:
+                    current[1] = stop
+                else:
+                    if current:
+                        runs.append(tuple(current))
+                    current = [ts, stop, heater_no, source]
+            elif current:
+                runs.append(tuple(current))
+                current = None
+
+        if current:
+            runs.append(tuple(current))
+        return runs
+
+    def _plot_tank_temps(self):
+        """@brief Plot the recorded top and bottom tank temperatures, shading the periods
+                  when each immersion heater was on and whether it was powered by solar or mains."""
+        if self._temp_plot_container is None or self._temp_period_select is None:
+            return
+        try:
+            hours = GUIServer.TEMP_PLOT_PERIODS.get(self._temp_period_select.value, 24)
+            samples = self._tank_temp_history.get(hours)
+            self._temp_plot_container.clear()
+            with self._temp_plot_container:
+                if len(samples) == 0:
+                    ui.label("No tank temperatures recorded yet.").style(GUIServer.TEXT_STYLE_C)
+                    return
+
+                ts_list = [s[0] for s in samples]
+                top_list = [s[1] for s in samples]
+                bottom_list = [s[2] for s in samples]
+
+                # Show HH:MM for short periods and the day as well for longer ones.
+                tick_format = '%H:%M' if hours <= 24 else '%a %H:%M'
+                all_temps = top_list + bottom_list
+                y_min = max(0, min(all_temps) - 5)
+                y_max = max(all_temps) + 5
+
+                fig = go.Figure()
+                fig.update_layout(margin=dict(l=0, r=0, t=0, b=0),
+                                  width=350,
+                                  height=250,
+                                  showlegend=True,
+                                  legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0),
+                                  plot_bgcolor="black",
+                                  paper_bgcolor="black",
+                                  font=dict(color="yellow"),
+                                  xaxis=dict(
+                                      title="",
+                                      tickformat=tick_format,
+                                      color="yellow",
+                                      gridcolor="gray",
+                                      zerolinecolor="gray"
+                                  ),
+                                  yaxis=dict(
+                                      title="°C",
+                                      color="yellow",
+                                      gridcolor="gray",
+                                      zerolinecolor="gray",
+                                      range=[y_min, y_max]
+                                  ),)
+
+                heater_on_mins = {GUIServer.HEATER_SOURCE_SOLAR: 0.0, GUIServer.HEATER_SOURCE_MAINS: 0.0}
+                if self._heater_shade_checkbox is None or self._heater_shade_checkbox.value:
+                    for start, stop, heater_no, source in self._get_heater_runs(samples):
+                        # Top heater shades the upper half of the plot, bottom heater the lower half.
+                        y0, y1 = (0.5, 1.0) if heater_no == MyEnergi.TANK_TOP else (0.0, 0.5)
+                        fig.add_shape(type="rect",
+                                      xref="x", yref="y domain",
+                                      x0=start, x1=stop, y0=y0, y1=y1,
+                                      fillcolor=GUIServer.HEATER_SHADE_COLORS[source],
+                                      opacity=GUIServer.HEATER_SHADE_OPACITY,
+                                      line_width=0,
+                                      layer="below")
+                        heater_on_mins[source] += (stop - start).total_seconds() / 60.0
+
+                fig.add_trace(go.Scatter(x=ts_list, y=top_list, mode='lines', name='Top', line=dict(color='orangered', width=2)))
+                fig.add_trace(go.Scatter(x=ts_list, y=bottom_list, mode='lines', name='Bottom', line=dict(color='deepskyblue', width=2)))
+                ui.plotly(fig)
+                ui.label(f"Now: top {top_list[-1]:.0f} °C, bottom {bottom_list[-1]:.0f} °C "
+                         f"(at {ts_list[-1].strftime('%H:%M')})").style(GUIServer.TEXT_STYLE_C)
+                if self._heater_shade_checkbox is None or self._heater_shade_checkbox.value:
+                    solar = heater_on_mins[GUIServer.HEATER_SOURCE_SOLAR]
+                    mains = heater_on_mins[GUIServer.HEATER_SOURCE_MAINS]
+                    ui.label(f"Heater on: solar {solar/60:.1f} h, mains {mains/60:.1f} h").style(GUIServer.TEXT_STYLE_C)
+
+        except Exception as ex:
+            GUIServer.Print_Exception()
+            ui.notify(f"{str(ex)}", type='negative')
 
     def command_line_config(self):
         """@brief Allow the user to configure the command line parameters."""
