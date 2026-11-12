@@ -886,7 +886,12 @@ class HotWaterTank(object):
               The tank is modelled as two halves, the top half at the top sensor temperature and
               the bottom half at the bottom sensor temperature. This is an approximation as the
               water in the tank is stratified (hottest at the top), but it is a lot better than
-              using a single average temperature."""
+              using a single average temperature.
+
+              Where the sensors are on the tank affects how well they represent the water in it.
+              A calibration factor (worked out by comparing the electrical energy put into the
+              tank with the rise in stored heat) corrects for this. The model then behaves as if
+              the tank held volume x calibration litres."""
 
     KWH_PER_LITRE_KELVIN = 4.186 / 3600.0      # Specific heat of water (1 litre ~ 1 kg)
     STANDARD_LOSS_DELTA_K = 45                  # Cylinder labels quote standing loss at 65 °C tank, 20 °C room
@@ -896,15 +901,26 @@ class HotWaterTank(object):
     DRAW_OFF_WINDOW = timedelta(minutes=15)     # ... within this time means hot water was used (or the tank was heated)
     SETTLE_TIME = timedelta(minutes=30)         # Ignore this long after hot water use while the tank settles
     MAX_LOSS_PERIODS = 5                        # Use the most recent cooling periods
+    HEATER_SETTLE_TIME = timedelta(hours=2.5)   # Ignore this long after heating while the heat spreads to the sensors
+    MAX_LOSS_STRATIFICATION_K = 25.0            # Only measure heat loss when the top and bottom are within this.
+    #                                             With a big difference the hot layer is thin and small hot water
+    #                                             uses or heat spreading between the sensors look like heat loss.
+    HEATING_SESSION_GAP = timedelta(hours=1)    # Heater on periods closer than this are one heating session
+    HEATING_SETTLED_WINDOW = timedelta(hours=3)  # Look this long after heating for the peak stored heat
+    DRAW_OFF_KWH = 0.3                          # A stored heat drop this big after heating means hot water was used
 
-    def __init__(self, volume_litres, cold_water_c, use_temp_c, shower_litres, ambient_c):
+    def __init__(self, volume_litres, cold_water_c, use_temp_c, shower_litres, ambient_c, calibration=1.0):
         """@brief Constructor
            @param volume_litres The tank volume in litres.
            @param cold_water_c The temperature of the cold water that refills the tank (°C).
            @param use_temp_c The temperature hot water is used at, E.G a shower (°C).
            @param shower_litres The litres of water at use_temp_c used by one shower.
-           @param ambient_c The temperature of the air around the tank (°C)."""
+           @param ambient_c The temperature of the air around the tank (°C).
+           @param calibration Scales the stored heat, hot water available and heat loss (see class description)."""
         self.volume_litres = volume_litres
+        self.calibration = calibration
+        # The volume used in the calculations
+        self.model_litres = volume_litres * calibration
         self.cold_water_c = cold_water_c
         self.use_temp_c = use_temp_c
         self.shower_litres = shower_litres
@@ -912,7 +928,7 @@ class HotWaterTank(object):
 
     def stored_kwh(self, top_c, bottom_c):
         """@return The heat stored in the tank (kWh) relative to cold water."""
-        half = self.volume_litres / 2.0
+        half = self.model_litres / 2.0
         kwh = 0.0
         for temp in (top_c, bottom_c):
             kwh += half * HotWaterTank.KWH_PER_LITRE_KELVIN * max(0.0, temp - self.cold_water_c)
@@ -921,7 +937,7 @@ class HotWaterTank(object):
     def litres_at_use_temp(self, top_c, bottom_c):
         """@return The litres of water at the use temperature that the tank can supply once mixed with cold water.
                    Only water hotter than the use temperature counts."""
-        half = self.volume_litres / 2.0
+        half = self.model_litres / 2.0
         litres = 0.0
         for temp in (top_c, bottom_c):
             if temp > self.use_temp_c:
@@ -934,6 +950,8 @@ class HotWaterTank(object):
 
     def find_cooling_periods(self, samples, min_heater_watts):
         """@brief Find periods when the tank was just cooling: heater off, no hot water used and no gaps in the data.
+                  Only periods when the tank was fully heated (top and bottom temperatures close) are used and
+                  the first couple of hours after heating are skipped while the heat spreads to the sensors.
            @param samples A list of samples as returned by TankTempHistory.get().
            @param min_heater_watts Below this power the heater is off.
            @return A list of lists of samples, one list per cooling period."""
@@ -956,8 +974,12 @@ class HotWaterTank(object):
             heater_off = heater_w is not None and heater_w <= min_heater_watts
             if not heater_off:
                 close()
+                settle_until = ts + HotWaterTank.HEATER_SETTLE_TIME
                 continue
             if settle_until and ts < settle_until:
+                continue
+            if top - bottom > HotWaterTank.MAX_LOSS_STRATIFICATION_K:
+                close()
                 continue
             if current and ts - current[-1][0] > max_gap:
                 close()
@@ -983,6 +1005,89 @@ class HotWaterTank(object):
             current.append(sample)
         close()
         return periods
+
+    def heating_sessions(self, samples, min_heater_watts, power_correction=1.0, w_per_k=None):
+        """@brief Find the heating sessions and compare the electrical energy used with the rise in stored heat.
+           @param samples A list of samples as returned by TankTempHistory.get().
+           @param min_heater_watts Below this power the heater is off.
+           @param power_correction Multiplies the heater power reported by the eddi (corrects eddi measurement errors).
+           @param w_per_k The tank heat loss (W/K) at this calibration or None if not known.
+                          Used to allow for the heat lost while the tank is heating.
+           @return A list of dicts, one per heating session, oldest first, containing
+                   start, stop             The datetimes the heating started and stopped.
+                   electric_kwh            The electrical energy used (from the eddi reported power x power_correction).
+                   stored_rise_kwh         The rise in stored heat (from the temperatures, at this calibration).
+                                           None if it could not be measured (E.G hot water used straight after heating).
+                   loss_kwh                The estimated heat lost during heating (0 if w_per_k is None).
+                   suggested_calibration   The calibration that makes the stored rise + loss equal the electrical
+                                           energy or None if it could not be worked out."""
+        if len(samples) < 2:
+            return []
+        gaps = sorted(samples[i + 1][0] - samples[i][0] for i in range(len(samples) - 1))
+        sample_period = gaps[len(gaps) // 2]
+
+        # Find the heater on sessions and the electrical energy used in each.
+        sessions = []
+        for index, sample in enumerate(samples):
+            ts, _, _, heater_w, _ = sample
+            if heater_w is None or heater_w <= min_heater_watts:
+                continue
+            if index < len(samples) - 1:
+                step = min(samples[index + 1][0] - ts, sample_period * 3)
+            else:
+                step = sample_period
+            kwh = heater_w * power_correction * step.total_seconds() / 3600.0 / 1000.0
+            if sessions and ts - sessions[-1]['stop'] <= HotWaterTank.HEATING_SESSION_GAP:
+                sessions[-1]['stop'] = ts + step
+                sessions[-1]['electric_kwh'] += kwh
+            else:
+                sessions.append({'start': ts, 'stop': ts + step, 'electric_kwh': kwh, 'start_index': index})
+
+        for session in sessions:
+            session['stored_rise_kwh'] = None
+            session['loss_kwh'] = 0.0
+            session['suggested_calibration'] = None
+            start_index = session.pop('start_index')
+            if start_index == 0:
+                continue        # No reading from before the heating started
+            before = samples[start_index - 1]
+            if session['start'] - before[0] > sample_period * 3:
+                continue
+            before_kwh = self.stored_kwh(before[1], before[2])
+
+            # The sensors keep rising for a while after heating so look for the peak stored heat,
+            # stopping if hot water is used or the heater comes on again.
+            peak_kwh = None
+            peak_ts = None
+            for sample in samples[start_index:]:
+                ts, top, bottom, heater_w, _ = sample
+                if ts < session['stop']:
+                    continue
+                if ts > session['stop'] + HotWaterTank.HEATING_SETTLED_WINDOW:
+                    break
+                if heater_w is not None and heater_w > min_heater_watts:
+                    break
+                kwh = self.stored_kwh(top, bottom)
+                if peak_kwh is not None and kwh < peak_kwh - HotWaterTank.DRAW_OFF_KWH:
+                    break
+                if peak_kwh is None or kwh > peak_kwh:
+                    peak_kwh = kwh
+                    peak_ts = ts
+            if peak_kwh is None:
+                continue
+
+            rise_kwh = peak_kwh - before_kwh
+            if w_per_k:
+                # Allow for the heat lost from the start of heating until the peak.
+                mean_tank_c = ((before[1] + before[2]) / 2.0 + (peak_kwh / (self.model_litres * HotWaterTank.KWH_PER_LITRE_KELVIN) + self.cold_water_c)) / 2.0
+                hours = (peak_ts - session['start']).total_seconds() / 3600.0
+                session['loss_kwh'] = max(0.0, w_per_k * (mean_tank_c - self.ambient_c) * hours / 1000.0)
+            session['stored_rise_kwh'] = rise_kwh
+            # The stored rise and loss both scale with the calibration so the calibration that
+            # makes them add up to the electrical energy used is simple to find.
+            if rise_kwh + session['loss_kwh'] > 0.5:
+                session['suggested_calibration'] = self.calibration * session['electric_kwh'] / (rise_kwh + session['loss_kwh'])
+        return sessions
 
     def heat_loss(self, samples, min_heater_watts):
         """@brief Estimate the tank heat loss from the periods when it was cooling.
@@ -1010,7 +1115,7 @@ class HotWaterTank(object):
             # Ignore periods where the tank warmed or is too close to room temperature to measure.
             if slope >= 0 or delta_k < HotWaterTank.MIN_LOSS_DELTA_K:
                 continue
-            watts = self.volume_litres * HotWaterTank.KWH_PER_LITRE_KELVIN * (-slope) * 1000.0
+            watts = self.model_litres * HotWaterTank.KWH_PER_LITRE_KELVIN * (-slope) * 1000.0
             results.append({'slope': slope,
                             'mean_c': mean_y,
                             'w_per_k': watts / delta_k,
@@ -1076,11 +1181,8 @@ class ClientView(object):
         self._stats_age_label = None
         self._hot_water_label = None
         self._heat_loss_label = None
-        self._tank_volume_input = None
-        self._cold_water_temp_input = None
-        self._use_temp_input = None
-        self._shower_litres_input = None
-        self._tank_ambient_temp_input = None
+        self._heating_sessions_label = None
+        self._tank_inputs = {}              # Hot water tank settings, config key: ui.number
         self._tank_temps_stale = None       # Whether the temperatures are currently shown as out of date
         self.queue = Queue()
 
@@ -1106,6 +1208,8 @@ class GUIServer(object):
     HOT_WATER_USE_TEMP_C = "HOT_WATER_USE_TEMP_C"
     SHOWER_LITRES = "SHOWER_LITRES"
     TANK_AMBIENT_TEMP_C = "TANK_AMBIENT_TEMP_C"
+    TANK_CALIBRATION = "TANK_CALIBRATION"
+    EDDI_POWER_CORRECTION = "EDDI_POWER_CORRECTION"
 
     DEFAULT_CONFIG = {MYENERGI_API_KEY: "",
                       EDDI_SERIAL_NUMBER: "",
@@ -1125,7 +1229,9 @@ class GUIServer(object):
                       COLD_WATER_TEMP_C: 10,
                       HOT_WATER_USE_TEMP_C: 40,
                       SHOWER_LITRES: 60,            # Litres at the use temperature, E.G 8 minutes at 7.5 litres/min
-                      TANK_AMBIENT_TEMP_C: 20}
+                      TANK_AMBIENT_TEMP_C: 20,
+                      TANK_CALIBRATION: 1.0,
+                      EDDI_POWER_CORRECTION: 1.0}
 
     # (config key, label, min, max, tooltip) for the hot water tank settings
     TANK_SETTINGS = ((TANK_VOLUME_LITRES, 'Tank volume (litres)', 20, 1000,
@@ -1137,7 +1243,14 @@ class GUIServer(object):
                      (SHOWER_LITRES, 'Shower (litres)', 5, 500,
                       "The litres of water at the use temperature used by one shower."),
                      (TANK_AMBIENT_TEMP_C, 'Room temperature at the tank (°C)', -10, 40,
-                      "The air temperature around the tank. Used to work out the heat loss."))
+                      "The air temperature around the tank. Used to work out the heat loss."),
+                     (EDDI_POWER_CORRECTION, 'eddi power correction', 0.5, 1.5,
+                      "Multiplies the heater power reported by the eddi when working out the energy used. "
+                      "Set to (energy measured by a meter) / (energy reported for the same heating on the TEMPS tab with this set to 1)."),
+                     (TANK_CALIBRATION, 'Tank calibration', 0.5, 2.0,
+                      "Corrects the stored heat, hot water and heat loss for where the eddi temperature sensors are on the tank. "
+                      "The TEMPS tab suggests a value from the heating sessions once the eddi power correction is set."))
+    HEATING_SESSIONS_SHOWN = 5          # The most recent heating sessions listed on the TEMPS tab
 
     TAB_BAR_STYLE = 'font-size: 20px; color: lightgreen;'
     TEXT_STYLE_A = 'font-size: 40px; color: white;'
@@ -1865,11 +1978,7 @@ class GUIServer(object):
     def _get_tank_setting_values(self):
         """@brief Read and check the hot water tank fields on the settings tab.
            @return A dict of config key: value or None if a value is invalid (the user is told why)."""
-        inputs = {GUIServer.TANK_VOLUME_LITRES: self._w._tank_volume_input,
-                  GUIServer.COLD_WATER_TEMP_C: self._w._cold_water_temp_input,
-                  GUIServer.HOT_WATER_USE_TEMP_C: self._w._use_temp_input,
-                  GUIServer.SHOWER_LITRES: self._w._shower_litres_input,
-                  GUIServer.TANK_AMBIENT_TEMP_C: self._w._tank_ambient_temp_input}
+        inputs = self._w._tank_inputs
         values = {}
         for key, label, min_value, max_value, _ in GUIServer.TANK_SETTINGS:
             value = inputs[key].value
@@ -1888,7 +1997,8 @@ class GUIServer(object):
                             float(self._cfg_mgr.getAttr(GUIServer.COLD_WATER_TEMP_C)),
                             float(self._cfg_mgr.getAttr(GUIServer.HOT_WATER_USE_TEMP_C)),
                             float(self._cfg_mgr.getAttr(GUIServer.SHOWER_LITRES)),
-                            float(self._cfg_mgr.getAttr(GUIServer.TANK_AMBIENT_TEMP_C)))
+                            float(self._cfg_mgr.getAttr(GUIServer.TANK_AMBIENT_TEMP_C)),
+                            float(self._cfg_mgr.getAttr(GUIServer.TANK_CALIBRATION)))
 
     def _set_latest_tank_temps(self, top_temp, bottom_temp):
         """@brief Record the tank temperatures just read from the myenergi server and when they were read.
@@ -2023,11 +2133,7 @@ class GUIServer(object):
                                              value=self._cfg_mgr.getAttr(key),
                                              min=min_value,
                                              max=max_value).style("width: 300px;").tooltip(tooltip)
-        self._w._tank_volume_input = tank_inputs[GUIServer.TANK_VOLUME_LITRES]
-        self._w._cold_water_temp_input = tank_inputs[GUIServer.COLD_WATER_TEMP_C]
-        self._w._use_temp_input = tank_inputs[GUIServer.HOT_WATER_USE_TEMP_C]
-        self._w._shower_litres_input = tank_inputs[GUIServer.SHOWER_LITRES]
-        self._w._tank_ambient_temp_input = tank_inputs[GUIServer.TANK_AMBIENT_TEMP_C]
+        self._w._tank_inputs = tank_inputs
 
         with ui.row():
             self._w._config_save_button = ui.button('Save', color=GUIServer.DEFAULT_BUTTON_COLOR, on_click=self._save_config_button_selected)
@@ -3077,9 +3183,14 @@ class GUIServer(object):
             self._w._temp_plot_container = ui.element('div').classes('w-full')
         with ui.row():
             self._w._heat_loss_label = ui.label("").style(GUIServer.TEXT_STYLE_C + " white-space: pre-line;")
-            self._w._heat_loss_label.tooltip("Worked out from periods of at least 3 hours with the heaters off and no hot water used "
-                                             "(shown as a grey bar along the bottom of the plot). It uses the average of the top and "
-                                             "bottom temperatures, so treat it as an estimate.")
+            self._w._heat_loss_label.tooltip("Worked out from periods of at least 3 hours when the tank was fully heated, the heaters were off "
+                                             "and no hot water was used (shown as a grey bar along the bottom of the plot). "
+                                             "It uses the average of the top and bottom temperatures, so treat it as an estimate.")
+        with ui.row():
+            self._w._heating_sessions_label = ui.label("").style(GUIServer.TEXT_STYLE_C + " white-space: pre-line;")
+            self._w._heating_sessions_label.tooltip("For each heating session: the electrical energy used (eddi reported power x eddi power correction) "
+                                                    "and the rise in heat stored in the tank. The difference is allowed for heat lost while heating. "
+                                                    "The suggested tank calibration makes them agree.")
 
         self._plot_tank_temps()
         # Keep the plot up to date while the page is open.
@@ -3153,7 +3264,8 @@ class GUIServer(object):
             return
         if heat_loss is None:
             label.text = ("Heat loss: not enough data yet. This needs a period of at least "
-                          f"{HotWaterTank.MIN_LOSS_PERIOD_HOURS:.0f} hours with the heaters off and no hot water used.")
+                          f"{HotWaterTank.MIN_LOSS_PERIOD_HOURS:.0f} hours when the tank is fully heated, "
+                          "starting 2.5 hours after heating, with no hot water used.")
             return
         now_delta_k = max(0.0, (top_temp + bottom_temp) / 2.0 - tank.ambient_c)
         now_watts = heat_loss['w_per_k'] * now_delta_k
@@ -3162,6 +3274,42 @@ class GUIServer(object):
                       f"Now ≈ {now_watts:.0f} W ({now_watts * 24 / 1000:.1f} kWh/day). "
                       f"≈ {heat_loss['standard_kwh_per_day']:.2f} kWh/24h at 45 K, comparable with the cylinder label.\n"
                       f"From {count} cooling period{'' if count == 1 else 's'}, assuming the room is {tank.ambient_c:.0f} °C.")
+
+    def _show_heating_sessions(self, tank, history, heat_loss):
+        """@brief Show the energy used and stored heat rise for the recent heating sessions on the TEMPS tab.
+           @param tank A HotWaterTank instance.
+           @param history All the recorded samples.
+           @param heat_loss The dict returned by HotWaterTank.heat_loss() or None."""
+        label = self._w._heating_sessions_label
+        if label is None:
+            return
+        power_correction = float(self._cfg_mgr.getAttr(GUIServer.EDDI_POWER_CORRECTION))
+        w_per_k = heat_loss['w_per_k'] if heat_loss else None
+        sessions = tank.heating_sessions(history, GUIServer.MIN_HEATER_WATTS, power_correction, w_per_k)
+        if not sessions:
+            label.text = ""
+            return
+        lines = [f"Heating (energy used / heat stored, eddi power x {power_correction:.2f}):"]
+        suggestions = []
+        for session in sessions[-GUIServer.HEATING_SESSIONS_SHOWN:]:
+            when = f"{session['start'].astimezone().strftime('%a %H:%M')}-{session['stop'].astimezone().strftime('%H:%M')}"
+            line = f"{when}: {session['electric_kwh']:.2f} kWh used"
+            if session['stored_rise_kwh'] is None:
+                line += ", heat stored not measured (hot water used straight after?)"
+            else:
+                line += f", {session['stored_rise_kwh']:.2f} kWh stored"
+                if session['loss_kwh'] > 0:
+                    line += f" + {session['loss_kwh']:.2f} lost"
+            lines.append(line)
+            if session['suggested_calibration']:
+                suggestions.append(session['suggested_calibration'])
+        if suggestions:
+            suggestions.sort()
+            lines.append(f"Suggested tank calibration: {suggestions[len(suggestions) // 2]:.2f} "
+                         f"(now {tank.calibration:.2f}, from {len(suggestions)} session{'' if len(suggestions) == 1 else 's'}).")
+            if power_correction == 1.0:
+                lines.append("Set the eddi power correction first if a meter shows the eddi power reading is out.")
+        label.text = "\n".join(lines)
 
     def _plot_tank_temps(self):
         """@brief Plot the recorded top and bottom tank temperatures, shading the periods
@@ -3177,6 +3325,8 @@ class GUIServer(object):
                     ui.label("No tank temperatures recorded yet.").style(GUIServer.TEXT_STYLE_C)
                     if self._w._heat_loss_label:
                         self._w._heat_loss_label.text = ""
+                    if self._w._heating_sessions_label:
+                        self._w._heating_sessions_label.text = ""
                     return
 
                 ts_list = [s[0] for s in samples]
@@ -3215,8 +3365,10 @@ class GUIServer(object):
 
                 # Heat loss uses all the recorded history, not just the period being displayed.
                 tank = self._get_hot_water_tank()
-                heat_loss = tank.heat_loss(self._tank_temp_history.get(24 * 366), GUIServer.MIN_HEATER_WATTS)
+                history = self._tank_temp_history.get(24 * 366)
+                heat_loss = tank.heat_loss(history, GUIServer.MIN_HEATER_WATTS)
                 self._show_heat_loss(tank, heat_loss, top_list[-1], bottom_list[-1])
+                self._show_heating_sessions(tank, history, heat_loss)
                 if heat_loss:
                     # Mark the periods used to work out the heat loss along the bottom of the plot.
                     for start, stop in heat_loss['periods']:
